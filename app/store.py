@@ -93,3 +93,18 @@ def recent_jobs(chat_id: int, limit: int = 5) -> list[Dict[str, Any]]:
         jobs = [j for j in _load().get('jobs', {}).values() if j.get('chat_id') == chat_id]
         jobs.sort(key=lambda j: j.get('created_at', 0), reverse=True)
         return jobs[:limit]
+
+
+def get_cache(key: str) -> Optional[Dict[str, Any]]:
+    with _lock:
+        return _load().get('cache', {}).get(key)
+
+
+def set_cache(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
+    with _lock:
+        data = _load()
+        cache = data.setdefault('cache', {})
+        value['updated_at'] = time.time()
+        cache[key] = value
+        _save(data)
+        return value

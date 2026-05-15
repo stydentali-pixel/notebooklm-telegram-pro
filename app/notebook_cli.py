@@ -52,7 +52,7 @@ async def run_cli(args: list[str], *, input_text: str | None = None, timeout: in
     env = settings.notebook_env()
     if notebook_id:
         env['NOTEBOOKLM_NOTEBOOK'] = notebook_id
-    cmd = ['notebooklm', '--quiet'] + args
+    cmd = ['notebooklm'] + args
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,

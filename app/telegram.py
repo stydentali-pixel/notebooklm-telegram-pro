@@ -17,16 +17,25 @@ def get_message(update: Dict[str, Any]) -> Dict[str, Any]:
     return update.get('message') or update.get('edited_message') or {}
 
 
+def get_callback_query(update: Dict[str, Any]) -> Dict[str, Any]:
+    return update.get('callback_query') or {}
+
+
 def get_chat_id(update: Dict[str, Any]) -> Optional[int]:
-    msg = get_message(update)
-    chat = msg.get('chat') or {}
+    cb = get_callback_query(update)
+    if cb:
+        msg = cb.get('message') or {}
+        chat = msg.get('chat') or {}
+    else:
+        msg = get_message(update)
+        chat = msg.get('chat') or {}
     cid = chat.get('id')
     return int(cid) if cid is not None else None
 
 
 def get_user_id(update: Dict[str, Any]) -> Optional[int]:
-    msg = get_message(update)
-    user = msg.get('from') or {}
+    cb = get_callback_query(update)
+    user = (cb.get('from') if cb else None) or (get_message(update).get('from') or {})
     uid = user.get('id')
     return int(uid) if uid is not None else None
 
@@ -34,6 +43,10 @@ def get_user_id(update: Dict[str, Any]) -> Optional[int]:
 def get_text(update: Dict[str, Any]) -> str:
     msg = get_message(update)
     return msg.get('text') or msg.get('caption') or ''
+
+
+def get_callback_data(update: Dict[str, Any]) -> str:
+    return (get_callback_query(update).get('data') or '').strip()
 
 
 def get_document(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -52,15 +65,18 @@ async def telegram_api(method: str, payload: Dict[str, Any] | None = None) -> Di
         return r.json()
 
 
-async def send_message(chat_id: int, text: str) -> Dict[str, Any]:
+async def send_message(chat_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:
     max_len = 3900
     if len(text) <= max_len:
-        return await telegram_api('sendMessage', {
+        payload = {
             'chat_id': chat_id,
             'text': text,
             'parse_mode': 'HTML',
             'disable_web_page_preview': True,
-        })
+        }
+        if reply_markup:
+            payload['reply_markup'] = reply_markup
+        return await telegram_api('sendMessage', payload)
 
     last = {}
     for i in range(0, len(text), max_len):
@@ -95,7 +111,7 @@ async def set_webhook() -> Dict[str, Any]:
         'url': webhook_url,
         'secret_token': settings.telegram_webhook_secret,
         'drop_pending_updates': True,
-        'allowed_updates': ['message', 'edited_message'],
+        'allowed_updates': ['message', 'edited_message', 'callback_query'],
     })
 
 
@@ -116,3 +132,11 @@ async def download_telegram_file(file_id: str, target_path: str) -> str:
         r.raise_for_status()
         Path(target_path).write_bytes(r.content)
     return target_path
+
+
+async def answer_callback_query(callback_query_id: str, text: str = '') -> Dict[str, Any]:
+    return await telegram_api('answerCallbackQuery', {
+        'callback_query_id': callback_query_id,
+        'text': text[:200],
+        'show_alert': False,
+    })

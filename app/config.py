@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     auto_delete_notebooks: bool = False
     max_telegram_file_mb: int = 45
 
+    # Media downloader settings. No database required.
+    download_max_file_mb: int = 45
+    download_timeout_seconds: int = 900
+    extract_timeout_seconds: int = 120
+    keepalive_enabled: bool = True
+    keepalive_interval_seconds: int = 240
+
     @property
     def admins(self) -> List[int]:
         values: list[int] = []

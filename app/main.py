@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 from pathlib import Path
 from typing import Any, Dict
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 
 from .config import get_settings
+from .downloader import (
+    DownloadError,
+    build_choices,
+    cleanup_old_downloads,
+    describe_info,
+    download_media,
+    extract_info,
+    first_url,
+    is_probably_url,
+)
 from .notebook_cli import (
     GENERATE_SPECS,
     NotebookCLIError,
@@ -22,9 +34,11 @@ from .notebook_cli import (
     list_notebooks,
     summary,
 )
-from .store import create_job, get_job, get_user, recent_jobs, update_job, update_user
+from .store import create_job, get_cache, get_job, get_user, recent_jobs, set_cache, update_job, update_user
 from .telegram import (
+    answer_callback_query,
     download_telegram_file,
+    get_callback_query,
     get_chat_id,
     get_document,
     get_text,
@@ -33,9 +47,10 @@ from .telegram import (
     send_document,
     send_message,
     set_webhook,
+    telegram_api,
 )
 
-app = FastAPI(title='NotebookLM Telegram Pro')
+app = FastAPI(title='NotebookLM Telegram Pro + Downloader')
 URL_RE = re.compile(r'https?://\S+')
 
 
@@ -46,9 +61,10 @@ def _is_admin(user_id: int | None) -> bool:
 
 def _commands() -> str:
     return (
-        '<b>أوامر البوت:</b>\n'
+        '<b>أوامر البوت الواحد:</b>\n\n'
+        '<b>NotebookLM:</b>\n'
         '/new عنوان الدفتر\n'
-        '/source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو\n'
+        '/source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو لإضافته إلى NotebookLM\n'
         '/summary ملخص سريع\n'
         '/ask سؤالك عن المصدر\n'
         '/audio بودكاست قصير\n'
@@ -59,12 +75,36 @@ def _commands() -> str:
         '/cards بطاقات مراجعة Markdown\n'
         '/mindmap خريطة ذهنية JSON\n'
         '/table جدول CSV\n'
-        '/report تقرير دراسة Markdown\n'
+        '/report تقرير دراسة Markdown\n\n'
+        '<b>التحميل:</b>\n'
+        '/fetch رابط أو /download رابط لاستخراج الجودات والتحويل إلى MP3\n'
+        'إرسال رابط مباشر بدون أمر سيعرض خيارات التحميل. استخدم /source إذا أردته كمصدر NotebookLM.\n\n'
+        '<b>إدارة:</b>\n'
         '/jobs آخر المهام\n'
         '/status حالة الجلسة\n'
         '/auth فحص جلسة NotebookLM للأدمن\n'
         '/setwebhook ضبط Webhook للأدمن\n'
     )
+
+
+@app.on_event('startup')
+async def startup_tasks() -> None:
+    settings = get_settings()
+    if settings.keepalive_enabled and settings.base_url:
+        asyncio.create_task(_keepalive_loop())
+
+
+async def _keepalive_loop() -> None:
+    settings = get_settings()
+    await asyncio.sleep(20)
+    while True:
+        try:
+            cleanup_old_downloads()
+            async with httpx.AsyncClient(timeout=20) as client:
+                await client.get(settings.base_url.rstrip('/') + '/health')
+        except Exception:
+            pass
+        await asyncio.sleep(max(60, int(settings.keepalive_interval_seconds)))
 
 
 @app.get('/')
@@ -75,13 +115,19 @@ async def root() -> Dict[str, Any]:
         'status': 'ok',
         'health': '/health',
         'telegram_webhook': '/telegram/webhook',
-        'features': list(GENERATE_SPECS.keys()) + ['summary', 'ask', 'source', 'file-upload'],
+        'features': list(GENERATE_SPECS.keys()) + ['summary', 'ask', 'source', 'file-upload', 'fetch', 'download', 'yt-dlp'],
     }
 
 
 @app.get('/health')
-async def health() -> Dict[str, str]:
-    return {'status': 'ok'}
+async def health() -> Dict[str, Any]:
+    return {'status': 'ok', 'time': int(time.time())}
+
+
+@app.get('/keepalive')
+async def keepalive() -> Dict[str, Any]:
+    cleanup_old_downloads()
+    return {'ok': True, 'status': 'awake', 'time': int(time.time())}
 
 
 @app.get('/health/notebooklm')
@@ -143,6 +189,80 @@ async def handle_document(chat_id: int, update: Dict[str, Any]) -> None:
     await send_message(chat_id, f'تمت إضافة الملف.\nNotebook: <code>{html_escape(nb)}</code>\nSource: <code>{html_escape(src)}</code>\n\nاستخدم /summary أو /ask أو /slides أو /quiz.')
 
 
+def _hash_url(url: str) -> str:
+    return hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
+
+
+def _download_keyboard(url_hash: str, choices: list[dict[str, str]]) -> Dict[str, Any]:
+    rows = []
+    for item in choices[:10]:
+        rows.append([{'text': item['label'], 'callback_data': f'dl:{url_hash}:{item["id"]}'}])
+    return {'inline_keyboard': rows}
+
+
+async def handle_fetch(chat_id: int, text: str) -> None:
+    url = first_url(text)
+    if not url:
+        await send_message(chat_id, 'أرسل رابطًا هكذا:\n<code>/fetch https://example.com/video</code>')
+        return
+    await send_message(chat_id, '🔎 أفحص الرابط وأستخرج الجودات...')
+    info = await extract_info(url)
+    choices = build_choices(info)
+    url_hash = _hash_url(url)
+    user = get_user(chat_id)
+    media = user.get('media') or {}
+    media[url_hash] = {
+        'url': url,
+        'title': info.get('title') or 'media',
+        'choices': choices,
+        'updated_at': time.time(),
+    }
+    update_user(chat_id, media=media, last_media_hash=url_hash)
+    await send_message(
+        chat_id,
+        '✅ تم استخراج الرابط:\n<code>' + html_escape(describe_info(info)) + '</code>\n\nاختر الجودة:',
+        reply_markup=_download_keyboard(url_hash, choices),
+    )
+
+
+async def run_download_job(job_id: str, chat_id: int, url_hash: str, choice: str) -> None:
+    update_job(job_id, status='running')
+    try:
+        user = get_user(chat_id)
+        media = (user.get('media') or {}).get(url_hash)
+        if not media:
+            raise DownloadError('لم أجد الرابط. أرسله مرة أخرى.')
+        url = media['url']
+        title = media.get('title') or 'media'
+        cache_key = f'{url_hash}:{choice}'
+        cached = get_cache(cache_key)
+        if cached and cached.get('telegram_file_id'):
+            await telegram_api('sendDocument', {'chat_id': chat_id, 'document': cached['telegram_file_id'], 'caption': '⚡ من الكاش'})
+            update_job(job_id, status='done', cached=True, finished_at=time.time())
+            return
+
+        await send_message(chat_id, f'⬇️ بدأ التحميل: <b>{html_escape(choice)}</b>\nقد يستغرق حسب الحجم والمنصة.')
+        path = await download_media(url, choice, title)
+        result = await send_document(chat_id, path, caption='✅ تم التحميل بنجاح.')
+        file_id = (((result.get('result') or {}).get('document') or {}).get('file_id'))
+        if file_id:
+            set_cache(cache_key, {'telegram_file_id': file_id, 'title': title, 'choice': choice})
+        update_job(job_id, status='done', result_path=path, finished_at=time.time())
+    except Exception as exc:
+        update_job(job_id, status='failed', error=str(exc), finished_at=time.time())
+        await send_message(chat_id, '❌ فشل التحميل:\n<code>' + html_escape(str(exc)) + '</code>')
+
+
+async def handle_download_callback(chat_id: int, update: Dict[str, Any]) -> None:
+    cb = get_callback_query(update)
+    data = cb.get('data') or ''
+    await answer_callback_query(cb.get('id', ''), 'بدأت المعالجة...')
+    _, url_hash, choice = data.split(':', 2)
+    job = create_job(chat_id, f'download:{choice}', '', url_hash)
+    asyncio.create_task(run_download_job(job['id'], chat_id, url_hash, choice))
+    await send_message(chat_id, f'تم إنشاء مهمة تحميل: <code>{html_escape(job["id"])}</code>\nتابعها عبر /job {html_escape(job["id"])}')
+
+
 @app.post('/telegram/webhook')
 async def telegram_webhook(
     request: Request,
@@ -160,12 +280,17 @@ async def telegram_webhook(
         return {'ok': True}
 
     try:
+        cb = get_callback_query(update)
+        if cb and (cb.get('data') or '').startswith('dl:'):
+            await handle_download_callback(chat_id, update)
+            return {'ok': True}
+
         if get_document(update):
             await handle_document(chat_id, update)
             return {'ok': True}
 
         if text.startswith('/start') or text.startswith('/help'):
-            await send_message(chat_id, 'أهلًا بك. هذا بوت NotebookLM شخصي للتجربة على Railway.\n\n' + _commands())
+            await send_message(chat_id, 'أهلًا بك. هذا بوت واحد يجمع NotebookLM وخدمة تحميل الوسائط على Railway.\n\n' + _commands())
             return {'ok': True}
 
         if text.startswith('/setwebhook'):
@@ -187,7 +312,7 @@ async def telegram_webhook(
 
         if text.startswith('/status'):
             user = get_user(chat_id)
-            await send_message(chat_id, '<b>حالة الجلسة:</b>\n<code>' + html_escape(json.dumps(user, ensure_ascii=False, indent=2)) + '</code>')
+            await send_message(chat_id, '<b>حالة الجلسة:</b>\n<code>' + html_escape(json.dumps(user, ensure_ascii=False, indent=2)[:3500]) + '</code>')
             return {'ok': True}
 
         if text.startswith('/list'):
@@ -216,6 +341,10 @@ async def telegram_webhook(
             await send_message(chat_id, '<code>' + html_escape(json.dumps(job or {}, ensure_ascii=False, indent=2)) + '</code>')
             return {'ok': True}
 
+        if text.startswith('/fetch') or text.startswith('/download') or (text and is_probably_url(text) and not text.startswith('/source')):
+            await handle_fetch(chat_id, text)
+            return {'ok': True}
+
         if text.startswith('/new'):
             title = text.removeprefix('/new').strip() or f'Telegram Notebook {chat_id}'
             nb = await create_notebook(title)
@@ -223,8 +352,8 @@ async def telegram_webhook(
             await send_message(chat_id, f'تم إنشاء دفتر جديد:\n<b>{html_escape(title)}</b>\n<code>{html_escape(nb)}</code>\n\nأرسل /source مع رابط أو ارفع ملفًا.')
             return {'ok': True}
 
-        if text.startswith('/source') or (text and URL_RE.search(text) and not text.startswith('/ask')):
-            payload = text.removeprefix('/source').strip() if text.startswith('/source') else URL_RE.search(text).group(0)
+        if text.startswith('/source'):
+            payload = text.removeprefix('/source').strip()
             if not payload:
                 await send_message(chat_id, 'اكتب: /source https://example.com أو أرسل ملف PDF.')
                 return {'ok': True}
@@ -269,6 +398,9 @@ async def telegram_webhook(
 
     except NotebookCLIError as exc:
         await send_message(chat_id, 'فشل NotebookLM:\n<code>' + html_escape(str(exc)) + '</code>')
+        return {'ok': True}
+    except DownloadError as exc:
+        await send_message(chat_id, 'فشل التحميل:\n<code>' + html_escape(str(exc)) + '</code>')
         return {'ok': True}
     except Exception as exc:
         await send_message(chat_id, 'حدث خطأ:\n<code>' + html_escape(str(exc)) + '</code>')
