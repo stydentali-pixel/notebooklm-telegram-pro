@@ -6,3 +6,7 @@ python-multipart==0.0.20
 notebooklm-py>=0.4.1
 
 yt-dlp>=2026.1.1
+# مكتبات إضافية لدعم التحميل وتجاوز الحظر
+pyyaml
+certifi
+brotli

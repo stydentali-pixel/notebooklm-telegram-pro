@@ -53,18 +53,40 @@ async def _run(cmd: list[str], timeout: int = 600, cwd: str | None = None) -> tu
 import contextlib  # noqa: E402
 
 
-async def extract_info(url: str) -> Dict[str, Any]:
+def _get_yt_dlp_base_args() -> list[str]:
     settings = get_settings()
-    cmd = [
+    args = [
         'python', '-m', 'yt_dlp',
-        '--dump-single-json',
         '--no-playlist',
         '--no-warnings',
+    ]
+    
+    # إضافة الكوكيز إذا وجدت في ملف
+    cookies_file = Path(settings.data_dir) / 'cookies.txt'
+    if cookies_file.exists():
+        args.extend(['--cookies', str(cookies_file)])
+    
+    # إضافة البروكسي إذا وجد في المتغيرات
+    proxy = os.getenv('DOWNLOAD_PROXY')
+    if proxy:
+        args.extend(['--proxy', proxy])
+        
+    # إضافة User-Agent قوي لتجنب الحظر
+    args.extend(['--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'])
+    
+    return args
+
+
+async def extract_info(url: str) -> Dict[str, Any]:
+    settings = get_settings()
+    cmd = _get_yt_dlp_base_args() + [
+        '--dump-single-json',
         '--skip-download',
         url,
     ]
     code, out, err = await _run(cmd, timeout=settings.extract_timeout_seconds)
     if code != 0:
+        # محاولة استخدام مكتبة بديلة أو استراتيجية أخرى إذا فشل yt-dlp الأساسي
         raise DownloadError((err or out or 'فشل استخراج معلومات الرابط')[-1500:])
     try:
         info = json.loads(out)
@@ -115,9 +137,8 @@ async def download_media(url: str, choice: str, title: str = '') -> str:
     root = Path(settings.download_dir) / 'media' / f'{int(time.time())}_{os.getpid()}'
     root.mkdir(parents=True, exist_ok=True)
     out_template = str(root / (_safe_name(title) + '.%(ext)s'))
-    cmd = [
-        'python', '-m', 'yt_dlp',
-        '--no-playlist',
+    
+    cmd = _get_yt_dlp_base_args() + [
         '--max-filesize', f'{settings.download_max_file_mb}M',
         '--merge-output-format', 'mp4',
         '--newline',
@@ -125,9 +146,14 @@ async def download_media(url: str, choice: str, title: str = '') -> str:
         '-o', out_template,
         url,
     ]
+    
     code, out, err = await _run(cmd, timeout=settings.download_timeout_seconds, cwd=str(root))
     if code != 0:
+        # إذا كان الخطأ متعلقاً بـ Sign in، نقوم بتنبيه المستخدم بوضوح
+        if 'Sign in to confirm you' in err or 'confirm you’re not a bot' in err:
+            raise DownloadError('يوتيوب يطلب تسجيل الدخول (Bot Detection). يرجى إضافة ملف cookies.txt إلى مجلد data في المستودع.')
         raise DownloadError((err or out or 'فشل التحميل')[-1800:])
+        
     files = [p for p in root.iterdir() if p.is_file() and not p.name.endswith('.part')]
     if not files:
         raise DownloadError('لم ينتج yt-dlp أي ملف.')
