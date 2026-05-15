@@ -8,7 +8,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Callable
 
 from .config import get_settings
 
@@ -17,6 +17,67 @@ URL_RE = re.compile(r'https?://\S+', re.I)
 
 class DownloadError(RuntimeError):
     pass
+
+
+# --- نظام الطابور (Queue System) المدمج ---
+class JobQueue:
+    def __init__(self, concurrency: int = 2):
+        self.concurrency = concurrency
+        self.running = 0
+        self.items: List[Dict[str, Any]] = []
+        self.user_locks: set[str] = set()
+        self.last_user_run: Dict[str, float] = {}
+
+    @property
+    def size(self) -> int:
+        return len(self.items)
+
+    @property
+    def active(self) -> int:
+        return self.running
+
+    def can_accept_user(self, user_id: str) -> bool:
+        settings = get_settings()
+        last = self.last_user_run.get(user_id, 0)
+        cooldown = getattr(settings, 'user_cooldown_seconds', 10)
+        return (time.time() - last) >= cooldown
+
+    def add(self, user_id: str, fn: Callable):
+        user_id = str(user_id)
+        if user_id in self.user_locks:
+            raise DownloadError('لديك طلب قيد التنفيذ. انتظر حتى ينتهي ثم أرسل طلبًا جديدًا.')
+        
+        if not self.can_accept_user(user_id):
+            settings = get_settings()
+            cooldown = getattr(settings, 'user_cooldown_seconds', 10)
+            raise DownloadError(f'انتظر {cooldown} ثوانٍ بين الطلبات.')
+            
+        self.items.append({'user_id': user_id, 'fn': fn})
+        asyncio.create_task(self.pump())
+
+    async def pump(self):
+        while self.running < self.concurrency and self.items:
+            item = self.items.pop(0)
+            if item['user_id'] in self.user_locks:
+                self.items.append(item)
+                break
+                
+            self.running += 1
+            self.user_locks.add(item['user_id'])
+            self.last_user_run[item['user_id']] = time.time()
+            
+            try:
+                await item['fn']()
+            except Exception:
+                pass
+            finally:
+                self.running -= 1
+                self.user_locks.remove(item['user_id'])
+                asyncio.create_task(self.pump())
+
+# إنشاء نسخة واحدة من الطابور
+# ملاحظة: max_concurrent_jobs يمكن إضافته للإعدادات لاحقاً
+global_queue = JobQueue(concurrency=2)
 
 
 def is_probably_url(text: str) -> bool:
@@ -55,13 +116,20 @@ def _safe_name(name: str) -> str:
 
 def _cookies_args() -> list[str]:
     settings = get_settings()
+    # التحقق من المتغير الجديد YTDLP_COOKIES_TXT أو ملف cookies.txt التقليدي
     raw = (settings.ytdlp_cookies_txt or '').strip()
-    if not raw:
-        return []
-    cookie_path = Path('/tmp/ytdlp_cookies.txt')
-    cookie_path.write_text(raw, encoding='utf-8')
-    cookie_path.chmod(0o600)
-    return ['--cookies', str(cookie_path)]
+    if raw:
+        cookie_path = Path('/tmp/ytdlp_cookies.txt')
+        cookie_path.write_text(raw, encoding='utf-8')
+        cookie_path.chmod(0o600)
+        return ['--cookies', str(cookie_path)]
+    
+    # التحقق من وجود ملف cookies.txt في مجلد data
+    local_cookies = Path(settings.data_dir) / 'cookies.txt'
+    if local_cookies.exists():
+        return ['--cookies', str(local_cookies)]
+        
+    return []
 
 
 def _common_args() -> list[str]:
@@ -74,6 +142,9 @@ def _common_args() -> list[str]:
         '--user-agent', settings.ytdlp_user_agent,
         '--referer', 'https://www.youtube.com/',
         '--add-header', 'Accept-Language: ar,en-US;q=0.9,en;q=0.8',
+        '--no-playlist',
+        '--restrict-filenames',
+        '--no-warnings',
     ]
     if settings.ytdlp_force_ipv4:
         args.append('--force-ipv4')
@@ -89,7 +160,7 @@ def _friendly_error(raw: str) -> str:
     if 'sign in to confirm' in lower or 'not a bot' in lower or 'confirm you' in lower:
         return (
             'يوتيوب طلب تحققًا من الجلسة لأن الطلب صادر من سيرفر. '
-            'أضف متغير YTDLP_COOKIES_TXT من حساب مخصص أو جرّب رابطًا آخر.\n\n'
+            'يرجى إضافة الكوكيز عبر متغير YTDLP_COOKIES_TXT في Railway.\n\n'
             + text[-900:]
         )
     if 'private video' in lower:
@@ -123,8 +194,6 @@ async def extract_info(url: str) -> Dict[str, Any]:
         'python', '-m', 'yt_dlp',
         *_common_args(),
         '--dump-single-json',
-        '--no-playlist',
-        '--no-warnings',
         '--skip-download',
         url,
     ]
@@ -149,9 +218,13 @@ def build_choices(info: Dict[str, Any]) -> List[Dict[str, str]]:
         if int(height) < 144:
             continue
         seen.add(int(height))
+    
+    # عرض الجودات بطريقة مرتبة كما في الحزمة الجديدة
     for h in sorted(seen, reverse=True)[:7]:
-        choices.append({'id': f'q{h}', 'label': f'🎬 فيديو {h}p'})
-    choices.append({'id': 'best', 'label': '🏆 أفضل فيديو متاح'})
+        icon = '🎥' if h >= 720 else '🎬'
+        choices.append({'id': f'q{h}', 'label': f'{icon} فيديو {h}p'})
+        
+    choices.append({'id': 'best', 'label': '🏆 أفضل جودة متاحة'})
     choices.append({'id': 'audio-mp3', 'label': '🎧 تحويل إلى MP3'})
     choices.append({'id': 'audio-m4a', 'label': '🎵 صوت M4A'})
     return choices
@@ -164,7 +237,10 @@ def describe_info(info: Dict[str, Any]) -> str:
     mins = duration // 60
     secs = duration % 60
     platform = detect_platform(info.get('webpage_url') or info.get('original_url') or '')
-    return f'{title}\nالمنصة: {platform}\nالناشر: {uploader}\nالمدة: {mins}:{secs:02d}'
+    size = info.get('filesize') or info.get('filesize_approx') or 0
+    size_str = f"{size / (1024*1024):.1f}MB" if size else "غير معروف"
+    
+    return f'🎬 <b>{_safe_name(title)}</b>\nالمنصة: {platform}\nالناشر: {uploader}\nالمدة: {mins}:{secs:02d}\nالحجم التقريبي: {size_str}'
 
 
 def _format_args(choice: str) -> list[str]:
@@ -173,7 +249,7 @@ def _format_args(choice: str) -> list[str]:
     if choice == 'audio-m4a':
         return ['-f', 'bestaudio[ext=m4a]/bestaudio', '--extract-audio', '--audio-format', 'm4a']
     if choice == 'best':
-        return ['-f', 'bv*+ba/b']
+        return ['-f', 'bestvideo+bestaudio/best']
     m = re.search(r'(\d+)', choice)
     h = m.group(1) if m else '720'
     return ['-f', f'bestvideo[height<={h}]+bestaudio/best[height<={h}]']
@@ -187,7 +263,6 @@ async def download_media(url: str, choice: str, title: str = '') -> str:
     cmd = [
         'python', '-m', 'yt_dlp',
         *_common_args(),
-        '--no-playlist',
         '--max-filesize', f'{settings.download_max_file_mb}M',
         '--merge-output-format', 'mp4',
         '--newline',
