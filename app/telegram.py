@@ -53,47 +53,79 @@ def get_document(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return get_message(update).get('document')
 
 
+def get_photo(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    photos = get_message(update).get('photo') or []
+    return photos[-1] if photos else None
+
+
 def _api_url(method: str) -> str:
     token = get_settings().telegram_bot_token
     return f'https://api.telegram.org/bot{token}/{method}'
 
 
 async def telegram_api(method: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=70) as client:
         r = await client.post(_api_url(method), json=payload or {})
         r.raise_for_status()
         return r.json()
 
 
-async def send_message(chat_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:
+async def send_chat_action(chat_id: int, action: str = 'typing') -> Dict[str, Any]:
+    return await telegram_api('sendChatAction', {'chat_id': chat_id, 'action': action})
+
+
+async def send_message(
+    chat_id: int,
+    text: str,
+    reply_markup: Dict[str, Any] | None = None,
+    *,
+    disable_preview: bool = True,
+) -> Dict[str, Any]:
     max_len = 3900
     if len(text) <= max_len:
-        payload = {
+        payload: Dict[str, Any] = {
             'chat_id': chat_id,
             'text': text,
             'parse_mode': 'HTML',
-            'disable_web_page_preview': True,
+            'disable_web_page_preview': disable_preview,
         }
         if reply_markup:
             payload['reply_markup'] = reply_markup
         return await telegram_api('sendMessage', payload)
 
-    last = {}
+    last: Dict[str, Any] = {}
     for i in range(0, len(text), max_len):
-        last = await telegram_api('sendMessage', {
+        chunk = text[i:i + max_len]
+        payload = {
             'chat_id': chat_id,
-            'text': text[i:i + max_len],
+            'text': chunk,
             'parse_mode': 'HTML',
-            'disable_web_page_preview': True,
-        })
+            'disable_web_page_preview': disable_preview,
+        }
+        if i + max_len >= len(text) and reply_markup:
+            payload['reply_markup'] = reply_markup
+        last = await telegram_api('sendMessage', payload)
     return last
+
+
+async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': text[:3900],
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True,
+    }
+    if reply_markup:
+        payload['reply_markup'] = reply_markup
+    return await telegram_api('editMessageText', payload)
 
 
 async def send_document(chat_id: int, path: str, caption: str = '') -> Dict[str, Any]:
     token = get_settings().telegram_bot_token
     url = f'https://api.telegram.org/bot{token}/sendDocument'
     p = Path(path)
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=360) as client:
         with p.open('rb') as f:
             r = await client.post(
                 url,
@@ -127,16 +159,16 @@ async def download_telegram_file(file_id: str, target_path: str) -> str:
         raise RuntimeError('Telegram did not return file_path')
     url = f'https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}'
     Path(target_path).parent.mkdir(parents=True, exist_ok=True)
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=360) as client:
         r = await client.get(url)
         r.raise_for_status()
         Path(target_path).write_bytes(r.content)
     return target_path
 
 
-async def answer_callback_query(callback_query_id: str, text: str = '') -> Dict[str, Any]:
+async def answer_callback_query(callback_query_id: str, text: str = '', *, alert: bool = False) -> Dict[str, Any]:
     return await telegram_api('answerCallbackQuery', {
         'callback_query_id': callback_query_id,
         'text': text[:200],
-        'show_alert': False,
+        'show_alert': alert,
     })

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -24,13 +25,80 @@ def is_probably_url(text: str) -> bool:
 
 def first_url(text: str) -> str:
     m = URL_RE.search(text or '')
-    return m.group(0) if m else ''
+    if not m:
+        return ''
+    return m.group(0).strip().rstrip('.,)؛،')
+
+
+def detect_platform(url: str) -> str:
+    u = (url or '').lower()
+    if 'youtube.com' in u or 'youtu.be' in u:
+        return 'youtube'
+    if 'tiktok.com' in u:
+        return 'tiktok'
+    if 'instagram.com' in u:
+        return 'instagram'
+    if 'x.com' in u or 'twitter.com' in u:
+        return 'twitter'
+    if 'facebook.com' in u or 'fb.watch' in u:
+        return 'facebook'
+    if 'soundcloud.com' in u:
+        return 'soundcloud'
+    return 'generic'
 
 
 def _safe_name(name: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]+', '_', name or 'media')
     name = re.sub(r'\s+', ' ', name).strip()
     return (name[:90] or 'media')
+
+
+def _cookies_args() -> list[str]:
+    settings = get_settings()
+    raw = (settings.ytdlp_cookies_txt or '').strip()
+    if not raw:
+        return []
+    cookie_path = Path('/tmp/ytdlp_cookies.txt')
+    cookie_path.write_text(raw, encoding='utf-8')
+    cookie_path.chmod(0o600)
+    return ['--cookies', str(cookie_path)]
+
+
+def _common_args() -> list[str]:
+    settings = get_settings()
+    args = [
+        '--retries', str(settings.ytdlp_retries),
+        '--fragment-retries', str(settings.ytdlp_fragment_retries),
+        '--socket-timeout', '30',
+        '--no-check-certificates',
+        '--user-agent', settings.ytdlp_user_agent,
+        '--referer', 'https://www.youtube.com/',
+        '--add-header', 'Accept-Language: ar,en-US;q=0.9,en;q=0.8',
+    ]
+    if settings.ytdlp_force_ipv4:
+        args.append('--force-ipv4')
+    if settings.ytdlp_geo_bypass:
+        args.append('--geo-bypass')
+    args += _cookies_args()
+    return args
+
+
+def _friendly_error(raw: str) -> str:
+    text = raw or 'فشل التحميل.'
+    lower = text.lower()
+    if 'sign in to confirm' in lower or 'not a bot' in lower or 'confirm you' in lower:
+        return (
+            'يوتيوب طلب تحققًا من الجلسة لأن الطلب صادر من سيرفر. '
+            'أضف متغير YTDLP_COOKIES_TXT من حساب مخصص أو جرّب رابطًا آخر.\n\n'
+            + text[-900:]
+        )
+    if 'private video' in lower:
+        return 'الفيديو خاص أو يحتاج صلاحية مشاهدة.'
+    if 'video unavailable' in lower:
+        return 'الفيديو غير متاح لهذا الرابط أو هذه المنطقة.'
+    if 'unsupported url' in lower:
+        return 'الرابط غير مدعوم من yt-dlp حاليًا.'
+    return text[-1600:]
 
 
 async def _run(cmd: list[str], timeout: int = 600, cwd: str | None = None) -> tuple[int, str, str]:
@@ -49,45 +117,20 @@ async def _run(cmd: list[str], timeout: int = 600, cwd: str | None = None) -> tu
     return proc.returncode or 0, out_b.decode('utf-8', 'replace'), err_b.decode('utf-8', 'replace')
 
 
-# Avoid importing contextlib only inside exception path on old linters.
-import contextlib  # noqa: E402
-
-
-def _get_yt_dlp_base_args() -> list[str]:
-    settings = get_settings()
-    args = [
-        'python', '-m', 'yt_dlp',
-        '--no-playlist',
-        '--no-warnings',
-    ]
-    
-    # إضافة الكوكيز إذا وجدت في ملف
-    cookies_file = Path(settings.data_dir) / 'cookies.txt'
-    if cookies_file.exists():
-        args.extend(['--cookies', str(cookies_file)])
-    
-    # إضافة البروكسي إذا وجد في المتغيرات
-    proxy = os.getenv('DOWNLOAD_PROXY')
-    if proxy:
-        args.extend(['--proxy', proxy])
-        
-    # إضافة User-Agent قوي لتجنب الحظر
-    args.extend(['--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'])
-    
-    return args
-
-
 async def extract_info(url: str) -> Dict[str, Any]:
     settings = get_settings()
-    cmd = _get_yt_dlp_base_args() + [
+    cmd = [
+        'python', '-m', 'yt_dlp',
+        *_common_args(),
         '--dump-single-json',
+        '--no-playlist',
+        '--no-warnings',
         '--skip-download',
         url,
     ]
     code, out, err = await _run(cmd, timeout=settings.extract_timeout_seconds)
     if code != 0:
-        # محاولة استخدام مكتبة بديلة أو استراتيجية أخرى إذا فشل yt-dlp الأساسي
-        raise DownloadError((err or out or 'فشل استخراج معلومات الرابط')[-1500:])
+        raise DownloadError(_friendly_error(err or out or 'فشل استخراج معلومات الرابط'))
     try:
         info = json.loads(out)
     except Exception as exc:
@@ -106,10 +149,11 @@ def build_choices(info: Dict[str, Any]) -> List[Dict[str, str]]:
         if int(height) < 144:
             continue
         seen.add(int(height))
-    for h in sorted(seen, reverse=True)[:6]:
-        choices.append({'id': f'q{h}', 'label': f'🎬 {h}p'})
-    choices.append({'id': 'best', 'label': '🎬 أفضل جودة'})
-    choices.append({'id': 'audio-mp3', 'label': '🎧 MP3 صوت'})
+    for h in sorted(seen, reverse=True)[:7]:
+        choices.append({'id': f'q{h}', 'label': f'🎬 فيديو {h}p'})
+    choices.append({'id': 'best', 'label': '🏆 أفضل فيديو متاح'})
+    choices.append({'id': 'audio-mp3', 'label': '🎧 تحويل إلى MP3'})
+    choices.append({'id': 'audio-m4a', 'label': '🎵 صوت M4A'})
     return choices
 
 
@@ -119,12 +163,15 @@ def describe_info(info: Dict[str, Any]) -> str:
     duration = int(info.get('duration') or 0)
     mins = duration // 60
     secs = duration % 60
-    return f'{title}\nالناشر: {uploader}\nالمدة: {mins}:{secs:02d}'
+    platform = detect_platform(info.get('webpage_url') or info.get('original_url') or '')
+    return f'{title}\nالمنصة: {platform}\nالناشر: {uploader}\nالمدة: {mins}:{secs:02d}'
 
 
 def _format_args(choice: str) -> list[str]:
     if choice == 'audio-mp3':
         return ['-x', '--audio-format', 'mp3', '--audio-quality', '0']
+    if choice == 'audio-m4a':
+        return ['-f', 'bestaudio[ext=m4a]/bestaudio', '--extract-audio', '--audio-format', 'm4a']
     if choice == 'best':
         return ['-f', 'bv*+ba/b']
     m = re.search(r'(\d+)', choice)
@@ -137,8 +184,10 @@ async def download_media(url: str, choice: str, title: str = '') -> str:
     root = Path(settings.download_dir) / 'media' / f'{int(time.time())}_{os.getpid()}'
     root.mkdir(parents=True, exist_ok=True)
     out_template = str(root / (_safe_name(title) + '.%(ext)s'))
-    
-    cmd = _get_yt_dlp_base_args() + [
+    cmd = [
+        'python', '-m', 'yt_dlp',
+        *_common_args(),
+        '--no-playlist',
         '--max-filesize', f'{settings.download_max_file_mb}M',
         '--merge-output-format', 'mp4',
         '--newline',
@@ -146,14 +195,9 @@ async def download_media(url: str, choice: str, title: str = '') -> str:
         '-o', out_template,
         url,
     ]
-    
     code, out, err = await _run(cmd, timeout=settings.download_timeout_seconds, cwd=str(root))
     if code != 0:
-        # إذا كان الخطأ متعلقاً بـ Sign in، نقوم بتنبيه المستخدم بوضوح
-        if 'Sign in to confirm you' in err or 'confirm you’re not a bot' in err:
-            raise DownloadError('يوتيوب يطلب تسجيل الدخول (Bot Detection). يرجى إضافة ملف cookies.txt إلى مجلد data في المستودع.')
-        raise DownloadError((err or out or 'فشل التحميل')[-1800:])
-        
+        raise DownloadError(_friendly_error(err or out or 'فشل التحميل'))
     files = [p for p in root.iterdir() if p.is_file() and not p.name.endswith('.part')]
     if not files:
         raise DownloadError('لم ينتج yt-dlp أي ملف.')

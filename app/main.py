@@ -38,20 +38,22 @@ from .store import create_job, get_cache, get_job, get_user, recent_jobs, set_ca
 from .telegram import (
     answer_callback_query,
     download_telegram_file,
+    edit_message_text,
     get_callback_query,
     get_chat_id,
     get_document,
+    get_message,
     get_text,
     get_user_id,
     html_escape,
+    send_chat_action,
     send_document,
     send_message,
     set_webhook,
     telegram_api,
 )
 
-app = FastAPI(title='NotebookLM Telegram Pro + Downloader')
-URL_RE = re.compile(r'https?://\S+')
+app = FastAPI(title='NotebookLM + Media Fetch Bot')
 
 
 def _is_admin(user_id: int | None) -> bool:
@@ -59,12 +61,46 @@ def _is_admin(user_id: int | None) -> bool:
     return bool(user_id and user_id in settings.admins)
 
 
-def _commands() -> str:
+def _main_keyboard() -> Dict[str, Any]:
+    return {'inline_keyboard': [
+        [
+            {'text': '📚 قسم NotebookLM', 'callback_data': 'menu:notebook'},
+            {'text': '⬇️ قسم التحميل', 'callback_data': 'menu:download'},
+        ],
+        [{'text': '📌 حالة الجلسة والمهام', 'callback_data': 'menu:status'}],
+    ]}
+
+
+def _notebook_keyboard() -> Dict[str, Any]:
+    return {'inline_keyboard': [
+        [{'text': '🆕 دفتر جديد', 'callback_data': 'nb:new'}, {'text': '➕ إضافة مصدر', 'callback_data': 'nb:source'}],
+        [{'text': '📝 ملخص', 'callback_data': 'nb:summary'}, {'text': '❓ سؤال', 'callback_data': 'nb:ask'}],
+        [{'text': '🎙️ بودكاست', 'callback_data': 'nb:audio'}, {'text': '🎞️ فيديو', 'callback_data': 'nb:video'}],
+        [{'text': '📊 شرائح', 'callback_data': 'nb:slides'}, {'text': '🖼️ إنفوجرافيك', 'callback_data': 'nb:infographic'}],
+        [{'text': '🧪 اختبار', 'callback_data': 'nb:quiz'}, {'text': '🃏 بطاقات', 'callback_data': 'nb:cards'}],
+        [{'text': '🧠 خريطة ذهنية', 'callback_data': 'nb:mindmap'}, {'text': '📋 جدول', 'callback_data': 'nb:table'}],
+        [{'text': '📘 تقرير', 'callback_data': 'nb:report'}],
+        [{'text': '⬅️ رجوع', 'callback_data': 'menu:main'}],
+    ]}
+
+
+def _download_section_keyboard() -> Dict[str, Any]:
+    return {'inline_keyboard': [
+        [{'text': '🔗 أرسل رابطًا الآن', 'callback_data': 'dl:await'}],
+        [{'text': '🎬 فيديو أفضل جودة', 'callback_data': 'dl:hint:best'}, {'text': '🎧 MP3', 'callback_data': 'dl:hint:audio-mp3'}],
+        [{'text': 'YouTube', 'callback_data': 'dl:platform:youtube'}, {'text': 'TikTok', 'callback_data': 'dl:platform:tiktok'}],
+        [{'text': 'Instagram', 'callback_data': 'dl:platform:instagram'}, {'text': 'X/Twitter', 'callback_data': 'dl:platform:twitter'}],
+        [{'text': 'Facebook', 'callback_data': 'dl:platform:facebook'}, {'text': 'SoundCloud', 'callback_data': 'dl:platform:soundcloud'}],
+        [{'text': '⬅️ رجوع', 'callback_data': 'menu:main'}],
+    ]}
+
+
+def _commands_notebook() -> str:
     return (
-        '<b>أوامر البوت الواحد:</b>\n\n'
-        '<b>NotebookLM:</b>\n'
+        '<b>📚 NotebookLM</b>\n\n'
+        'ابدأ من الأزرار أو استخدم الأوامر:\n'
         '/new عنوان الدفتر\n'
-        '/source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو لإضافته إلى NotebookLM\n'
+        '/source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو\n'
         '/summary ملخص سريع\n'
         '/ask سؤالك عن المصدر\n'
         '/audio بودكاست قصير\n'
@@ -76,14 +112,28 @@ def _commands() -> str:
         '/mindmap خريطة ذهنية JSON\n'
         '/table جدول CSV\n'
         '/report تقرير دراسة Markdown\n\n'
-        '<b>التحميل:</b>\n'
-        '/fetch رابط أو /download رابط لاستخراج الجودات والتحويل إلى MP3\n'
-        'إرسال رابط مباشر بدون أمر سيعرض خيارات التحميل. استخدم /source إذا أردته كمصدر NotebookLM.\n\n'
-        '<b>إدارة:</b>\n'
-        '/jobs آخر المهام\n'
-        '/status حالة الجلسة\n'
-        '/auth فحص جلسة NotebookLM للأدمن\n'
-        '/setwebhook ضبط Webhook للأدمن\n'
+        '💡 إذا كنت تريد استخدام الرابط كمصدر معرفي، استخدم /source قبل الرابط.'
+    )
+
+
+def _commands_download() -> str:
+    return (
+        '<b>⬇️ قسم التحميل</b>\n\n'
+        'أرسل رابطًا مباشرًا أو استخدم:\n'
+        '/fetch رابط\n'
+        '/download رابط\n\n'
+        'بعد إرسال الرابط سأعرض الجودات المتاحة: فيديو، أفضل جودة، MP3، M4A.\n'
+        'يدعم yt-dlp منصات كثيرة مثل YouTube وTikTok وInstagram وX وFacebook وSoundCloud حسب توفر الرابط.\n\n'
+        'ملاحظة: بعض روابط YouTube قد تحتاج YTDLP_COOKIES_TXT في Railway إذا طلب يوتيوب تحققًا من الجلسة.'
+    )
+
+
+def _welcome() -> str:
+    return (
+        'أهلًا بك. اختر القسم الذي تريد العمل عليه.\n\n'
+        '📚 <b>NotebookLM</b>: مصادر، تلخيص، سؤال، بودكاست، فيديو، شرائح، إنفوجرافيك، كويز، بطاقات، خريطة ذهنية، جدول، تقرير.\n\n'
+        '⬇️ <b>التحميل</b>: استخراج الجودات وتحويل الصوت MP3 من الروابط المدعومة.\n\n'
+        'هذا بوت واحد. اختر قسمًا من الأزرار بالأسفل.'
     )
 
 
@@ -96,7 +146,7 @@ async def startup_tasks() -> None:
 
 async def _keepalive_loop() -> None:
     settings = get_settings()
-    await asyncio.sleep(20)
+    await asyncio.sleep(25)
     while True:
         try:
             cleanup_old_downloads()
@@ -115,7 +165,7 @@ async def root() -> Dict[str, Any]:
         'status': 'ok',
         'health': '/health',
         'telegram_webhook': '/telegram/webhook',
-        'features': list(GENERATE_SPECS.keys()) + ['summary', 'ask', 'source', 'file-upload', 'fetch', 'download', 'yt-dlp'],
+        'features': list(GENERATE_SPECS.keys()) + ['summary', 'ask', 'source', 'file-upload', 'fetch', 'download', 'yt-dlp', 'interactive-menus'],
     }
 
 
@@ -181,12 +231,13 @@ async def handle_document(chat_id: int, update: Dict[str, Any]) -> None:
     file_name = doc.get('file_name') or f'telegram-file-{doc.get("file_unique_id", int(time.time()))}'
     safe_name = re.sub(r'[^A-Za-z0-9._-]+', '_', file_name)
     target = str(Path(settings.upload_dir) / f'{chat_id}_{int(time.time())}_{safe_name}')
+    await send_chat_action(chat_id, 'upload_document')
     await send_message(chat_id, 'استلمت الملف. جارٍ تحميله وإضافته إلى NotebookLM...')
     await download_telegram_file(doc['file_id'], target)
     nb = await ensure_notebook(chat_id, f'Telegram Uploads {chat_id}')
     src = await add_source(nb, target, title=file_name)
-    update_user(chat_id, notebook_id=nb, last_source_id=src, last_file=target)
-    await send_message(chat_id, f'تمت إضافة الملف.\nNotebook: <code>{html_escape(nb)}</code>\nSource: <code>{html_escape(src)}</code>\n\nاستخدم /summary أو /ask أو /slides أو /quiz.')
+    update_user(chat_id, mode='notebook', notebook_id=nb, last_source_id=src, last_file=target)
+    await send_message(chat_id, f'تمت إضافة الملف.\nNotebook: <code>{html_escape(nb)}</code>\nSource: <code>{html_escape(src)}</code>\n\nاستخدم /summary أو /ask أو اختر من القائمة.', reply_markup=_notebook_keyboard())
 
 
 def _hash_url(url: str) -> str:
@@ -195,16 +246,20 @@ def _hash_url(url: str) -> str:
 
 def _download_keyboard(url_hash: str, choices: list[dict[str, str]]) -> Dict[str, Any]:
     rows = []
-    for item in choices[:10]:
+    for item in choices[:12]:
         rows.append([{'text': item['label'], 'callback_data': f'dl:{url_hash}:{item["id"]}'}])
+    rows.append([{'text': '⬅️ قسم التحميل', 'callback_data': 'menu:download'}, {'text': '🏠 الرئيسية', 'callback_data': 'menu:main'}])
     return {'inline_keyboard': rows}
 
 
 async def handle_fetch(chat_id: int, text: str) -> None:
     url = first_url(text)
     if not url:
-        await send_message(chat_id, 'أرسل رابطًا هكذا:\n<code>/fetch https://example.com/video</code>')
+        update_user(chat_id, mode='download')
+        await send_message(chat_id, 'أرسل الرابط الآن، أو استخدم:\n<code>/fetch https://example.com/video</code>', reply_markup=_download_section_keyboard())
         return
+    update_user(chat_id, mode='download')
+    await send_chat_action(chat_id, 'typing')
     await send_message(chat_id, '🔎 أفحص الرابط وأستخرج الجودات...')
     info = await extract_info(url)
     choices = build_choices(info)
@@ -242,6 +297,7 @@ async def run_download_job(job_id: str, chat_id: int, url_hash: str, choice: str
             return
 
         await send_message(chat_id, f'⬇️ بدأ التحميل: <b>{html_escape(choice)}</b>\nقد يستغرق حسب الحجم والمنصة.')
+        await send_chat_action(chat_id, 'upload_document')
         path = await download_media(url, choice, title)
         result = await send_document(chat_id, path, caption='✅ تم التحميل بنجاح.')
         file_id = (((result.get('result') or {}).get('document') or {}).get('file_id'))
@@ -263,6 +319,87 @@ async def handle_download_callback(chat_id: int, update: Dict[str, Any]) -> None
     await send_message(chat_id, f'تم إنشاء مهمة تحميل: <code>{html_escape(job["id"])}</code>\nتابعها عبر /job {html_escape(job["id"])}')
 
 
+async def handle_menu_callback(chat_id: int, update: Dict[str, Any]) -> bool:
+    cb = get_callback_query(update)
+    if not cb:
+        return False
+    data = cb.get('data') or ''
+    message = cb.get('message') or {}
+    message_id = message.get('message_id')
+    await answer_callback_query(cb.get('id', ''), 'تم')
+
+    async def show(text: str, keyboard: Dict[str, Any]) -> None:
+        if message_id:
+            try:
+                await edit_message_text(chat_id, int(message_id), text, keyboard)
+                return
+            except Exception:
+                pass
+        await send_message(chat_id, text, keyboard)
+
+    if data == 'menu:main':
+        update_user(chat_id, mode='main')
+        await show(_welcome(), _main_keyboard())
+        return True
+    if data == 'menu:notebook':
+        update_user(chat_id, mode='notebook')
+        await show(_commands_notebook(), _notebook_keyboard())
+        return True
+    if data == 'menu:download':
+        update_user(chat_id, mode='download')
+        await show(_commands_download(), _download_section_keyboard())
+        return True
+    if data == 'menu:status':
+        user = get_user(chat_id)
+        jobs = recent_jobs(chat_id)
+        text = '<b>📌 الحالة</b>\n' + f'الوضع الحالي: <code>{html_escape(user.get("mode", "main"))}</code>\n' + f'آخر المهام: <code>{len(jobs)}</code>'
+        await show(text, {'inline_keyboard': [[{'text': '🏠 الرئيسية', 'callback_data': 'menu:main'}]]})
+        return True
+    if data == 'dl:await':
+        update_user(chat_id, mode='download')
+        await send_message(chat_id, 'أرسل الرابط الآن وسأعرض لك خيارات الجودة والتحويل.')
+        return True
+    if data.startswith('dl:platform:'):
+        platform = data.split(':', 2)[2]
+        await send_message(chat_id, f'أرسل رابط {html_escape(platform)} الآن. سأستخرج الجودات تلقائيًا.')
+        update_user(chat_id, mode='download')
+        return True
+    if data.startswith('dl:hint:'):
+        update_user(chat_id, mode='download', preferred_download=data.split(':', 2)[2])
+        await send_message(chat_id, 'أرسل الرابط الآن. بعد استخراج الجودات اختر الجودة المناسبة.')
+        return True
+    if data.startswith('nb:'):
+        action = data.split(':', 1)[1]
+        update_user(chat_id, mode='notebook')
+        if action == 'new':
+            await send_message(chat_id, 'اكتب اسم الدفتر هكذا:\n<code>/new بحث الذكاء الاصطناعي</code>')
+        elif action == 'source':
+            await send_message(chat_id, 'أرسل المصدر هكذا:\n<code>/source https://example.com</code>\nأو ارفع ملف PDF/DOCX/TXT.')
+        elif action == 'summary':
+            await handle_summary(chat_id)
+        elif action == 'ask':
+            await send_message(chat_id, 'اكتب سؤالك هكذا:\n<code>/ask ما أهم النقاط؟</code>')
+        elif action in GENERATE_SPECS:
+            await start_generation(chat_id, action, '')
+        return True
+    return False
+
+
+async def handle_summary(chat_id: int) -> None:
+    nb = await ensure_notebook(chat_id)
+    await send_chat_action(chat_id, 'typing')
+    await send_message(chat_id, 'جارٍ إنشاء الملخص...')
+    result = await summary(nb)
+    await send_message(chat_id, html_escape(result), reply_markup=_notebook_keyboard())
+
+
+async def start_generation(chat_id: int, kind: str, desc: str) -> None:
+    nb = await ensure_notebook(chat_id)
+    job = create_job(chat_id, kind, nb, desc)
+    asyncio.create_task(run_generation_job(job['id'], chat_id, kind, nb, desc))
+    await send_message(chat_id, f'تم إنشاء المهمة: <code>{html_escape(job["id"])}</code>\nتابعها عبر /job {html_escape(job["id"])}')
+
+
 @app.post('/telegram/webhook')
 async def telegram_webhook(
     request: Request,
@@ -281,8 +418,10 @@ async def telegram_webhook(
 
     try:
         cb = get_callback_query(update)
-        if cb and (cb.get('data') or '').startswith('dl:'):
+        if cb and (cb.get('data') or '').startswith('dl:') and (cb.get('data') or '').count(':') >= 2 and not (cb.get('data') or '').startswith(('dl:await', 'dl:platform', 'dl:hint')):
             await handle_download_callback(chat_id, update)
+            return {'ok': True}
+        if cb and await handle_menu_callback(chat_id, update):
             return {'ok': True}
 
         if get_document(update):
@@ -290,7 +429,12 @@ async def telegram_webhook(
             return {'ok': True}
 
         if text.startswith('/start') or text.startswith('/help'):
-            await send_message(chat_id, 'أهلًا بك. هذا بوت واحد يجمع NotebookLM وخدمة تحميل الوسائط على Railway.\n\n' + _commands())
+            update_user(chat_id, mode='main')
+            await send_message(chat_id, _welcome(), reply_markup=_main_keyboard())
+            return {'ok': True}
+
+        if text.startswith('/menu'):
+            await send_message(chat_id, _welcome(), reply_markup=_main_keyboard())
             return {'ok': True}
 
         if text.startswith('/setwebhook'):
@@ -312,7 +456,7 @@ async def telegram_webhook(
 
         if text.startswith('/status'):
             user = get_user(chat_id)
-            await send_message(chat_id, '<b>حالة الجلسة:</b>\n<code>' + html_escape(json.dumps(user, ensure_ascii=False, indent=2)[:3500]) + '</code>')
+            await send_message(chat_id, '<b>حالة الجلسة:</b>\n<code>' + html_escape(json.dumps(user, ensure_ascii=False, indent=2)[:3500]) + '</code>', reply_markup=_main_keyboard())
             return {'ok': True}
 
         if text.startswith('/list'):
@@ -341,59 +485,66 @@ async def telegram_webhook(
             await send_message(chat_id, '<code>' + html_escape(json.dumps(job or {}, ensure_ascii=False, indent=2)) + '</code>')
             return {'ok': True}
 
-        if text.startswith('/fetch') or text.startswith('/download') or (text and is_probably_url(text) and not text.startswith('/source')):
+        if text.startswith('/fetch') or text.startswith('/download'):
             await handle_fetch(chat_id, text)
             return {'ok': True}
 
         if text.startswith('/new'):
+            update_user(chat_id, mode='notebook')
             title = text.removeprefix('/new').strip() or f'Telegram Notebook {chat_id}'
             nb = await create_notebook(title)
             update_user(chat_id, notebook_id=nb, notebook_title=title, last_source_id='')
-            await send_message(chat_id, f'تم إنشاء دفتر جديد:\n<b>{html_escape(title)}</b>\n<code>{html_escape(nb)}</code>\n\nأرسل /source مع رابط أو ارفع ملفًا.')
+            await send_message(chat_id, f'تم إنشاء دفتر جديد:\n<b>{html_escape(title)}</b>\n<code>{html_escape(nb)}</code>\n\nأرسل /source مع رابط أو ارفع ملفًا.', reply_markup=_notebook_keyboard())
             return {'ok': True}
 
         if text.startswith('/source'):
+            update_user(chat_id, mode='notebook')
             payload = text.removeprefix('/source').strip()
             if not payload:
-                await send_message(chat_id, 'اكتب: /source https://example.com أو أرسل ملف PDF.')
+                await send_message(chat_id, 'اكتب: /source https://example.com أو أرسل ملف PDF.', reply_markup=_notebook_keyboard())
                 return {'ok': True}
             nb = await ensure_notebook(chat_id)
             await send_message(chat_id, 'جارٍ إضافة المصدر إلى NotebookLM...')
             src = await add_source(nb, payload)
             update_user(chat_id, notebook_id=nb, last_source_id=src)
-            await send_message(chat_id, f'تمت إضافة المصدر.\nNotebook: <code>{html_escape(nb)}</code>\nSource: <code>{html_escape(src)}</code>')
+            await send_message(chat_id, f'تمت إضافة المصدر.\nNotebook: <code>{html_escape(nb)}</code>\nSource: <code>{html_escape(src)}</code>', reply_markup=_notebook_keyboard())
             return {'ok': True}
 
         if text.startswith('/summary'):
-            nb = await ensure_notebook(chat_id)
-            await send_message(chat_id, 'جارٍ إنشاء الملخص...')
-            result = await summary(nb)
-            await send_message(chat_id, html_escape(result))
+            await handle_summary(chat_id)
             return {'ok': True}
 
         if text.startswith('/ask'):
+            update_user(chat_id, mode='notebook')
             q = text.removeprefix('/ask').strip()
             if not q:
-                await send_message(chat_id, 'اكتب السؤال بعد الأمر. مثال:\n<code>/ask لخّص أهم النقاط</code>')
+                await send_message(chat_id, 'اكتب السؤال بعد الأمر. مثال:\n<code>/ask لخّص أهم النقاط</code>', reply_markup=_notebook_keyboard())
                 return {'ok': True}
             nb = await ensure_notebook(chat_id)
             await send_message(chat_id, 'جارٍ سؤال NotebookLM...')
             result = await ask(nb, q)
-            await send_message(chat_id, html_escape(result))
+            await send_message(chat_id, html_escape(result), reply_markup=_notebook_keyboard())
             return {'ok': True}
 
         command = text.split()[0].lstrip('/').lower() if text.startswith('/') else ''
         alias = {'flashcards': 'cards', 'card': 'cards', 'mind-map': 'mindmap', 'data-table': 'table', 'slide': 'slides'}
         kind = alias.get(command, command)
         if kind in GENERATE_SPECS:
-            nb = await ensure_notebook(chat_id)
+            update_user(chat_id, mode='notebook')
             desc = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ''
-            job = create_job(chat_id, kind, nb, desc)
-            asyncio.create_task(run_generation_job(job['id'], chat_id, kind, nb, desc))
-            await send_message(chat_id, f'تم إنشاء المهمة: <code>{html_escape(job["id"])}</code>\nتابعها عبر /job {html_escape(job["id"])}')
+            await start_generation(chat_id, kind, desc)
             return {'ok': True}
 
-        await send_message(chat_id, 'لم أفهم الأمر.\n\n' + _commands())
+        if text and is_probably_url(text):
+            user = get_user(chat_id)
+            mode = user.get('mode') or 'main'
+            if mode == 'notebook':
+                await send_message(chat_id, 'هل تريد استخدام هذا الرابط كمصدر NotebookLM؟ استخدم:\n<code>/source ' + html_escape(first_url(text)) + '</code>\n\nأو اضغط قسم التحميل إذا أردته للتنزيل.', reply_markup=_main_keyboard())
+                return {'ok': True}
+            await handle_fetch(chat_id, text)
+            return {'ok': True}
+
+        await send_message(chat_id, 'اختر قسمًا من القائمة:', reply_markup=_main_keyboard())
         return {'ok': True}
 
     except NotebookCLIError as exc:

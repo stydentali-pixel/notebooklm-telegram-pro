@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
-    app_name: str = 'NotebookLM Telegram Pro'
+    app_name: str = 'NotebookLM + Media Fetch Bot'
     telegram_bot_token: str = ''
     telegram_webhook_secret: str = ''
     admin_ids: str = ''
@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     extract_timeout_seconds: int = 120
     keepalive_enabled: bool = True
     keepalive_interval_seconds: int = 240
+
+    # Optional, safe yt-dlp hardening. Do not put cookies in GitHub.
+    ytdlp_cookies_txt: str = ''
+    ytdlp_user_agent: str = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+    ytdlp_retries: int = 3
+    ytdlp_fragment_retries: int = 5
+    ytdlp_force_ipv4: bool = True
+    ytdlp_geo_bypass: bool = True
 
     @property
     def admins(self) -> List[int]:
