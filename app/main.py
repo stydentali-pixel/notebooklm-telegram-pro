@@ -24,7 +24,7 @@ from .notebook_cli import (
 )
 from .store import create_job, get_job, get_user, recent_jobs, update_job, update_user
 from .telegram import (
-from openrouter_ai import ask_openrouter, OpenRouterError
+# from openrouter_ai import ask_openrouter, OpenRouterError  # disabled: caused Railway SyntaxError
     download_telegram_file,
     get_chat_id,
     get_document,

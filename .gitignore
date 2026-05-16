@@ -20,3 +20,10 @@ NOTEBOOKLM_AUTH_JSON.txt
 cookies.txt
 cookies.txt.saved
 NOTEBOOKLM_AUTH_JSON.txt
+
+# local secrets / cookies
+cookies.txt
+cookies.txt.save
+google-cookies.txt
+*cookies*.txt
+NOTEBOOKLM_AUTH_JSON.txt
