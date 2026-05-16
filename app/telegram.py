@@ -74,38 +74,37 @@ async def send_chat_action(chat_id: int, action: str = 'typing') -> Dict[str, An
     return await telegram_api('sendChatAction', {'chat_id': chat_id, 'action': action})
 
 
-async def send_message(
-    chat_id: int,
-    text: str,
-    reply_markup: Dict[str, Any] | None = None,
-    *,
-    disable_preview: bool = True,
-) -> Dict[str, Any]:
-    max_len = 3900
-    if len(text) <= max_len:
-        payload: Dict[str, Any] = {
-            'chat_id': chat_id,
-            'text': text,
-            'parse_mode': 'HTML',
-            'disable_web_page_preview': disable_preview,
-        }
-        if reply_markup:
-            payload['reply_markup'] = reply_markup
-        return await telegram_api('sendMessage', payload)
+async def send_message(chat_id: int, text: str, reply_markup=None):
+    import os
+    import json
+    import urllib.request
+    import asyncio
 
-    last: Dict[str, Any] = {}
-    for i in range(0, len(text), max_len):
-        chunk = text[i:i + max_len]
-        payload = {
-            'chat_id': chat_id,
-            'text': chunk,
-            'parse_mode': 'HTML',
-            'disable_web_page_preview': disable_preview,
-        }
-        if i + max_len >= len(text) and reply_markup:
-            payload['reply_markup'] = reply_markup
-        last = await telegram_api('sendMessage', payload)
-    return last
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is missing")
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    def _post():
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as res:
+            return json.loads(res.read().decode("utf-8"))
+
+    return await asyncio.to_thread(_post)
 
 
 async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:

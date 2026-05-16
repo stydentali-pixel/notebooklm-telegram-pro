@@ -46,13 +46,40 @@ def _is_admin(user_id: int | None) -> bool:
 
 
 def _commands() -> str:
+    return _main_menu_text()
+
+
+def _main_menu_text() -> str:
     return """أهلًا بك 👋
 
-هذا بوت واحد يجمع NotebookLM وخدمة تحميل الوسائط على Railway.
-
-اختر القسم الذي تريده:
+اختر القسم الذي تريد استخدامه:
 
 📚 قسم NotebookLM
+لإضافة المصادر، التلخيص، الأسئلة، الشرائح، الكويز، البطاقات، التقرير، الصوت، الفيديو، الإنفوجرافيك، الخريطة الذهنية، والجداول.
+
+⬇️ قسم التحميل
+لتحميل الوسائط من الروابط، اختيار الجودة، أو التحويل إلى MP3.
+
+اضغط أحد الأزرار بالأسفل أو استخدم:
+/notebooklm
+/downloads
+"""
+
+
+def _main_menu_keyboard() -> dict:
+    return {
+        "keyboard": [
+            [{"text": "/notebooklm"}, {"text": "/downloads"}],
+            [{"text": "/status"}, {"text": "/jobs"}],
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": False,
+    }
+
+
+def _notebooklm_menu_text() -> str:
+    return """📚 قسم NotebookLM
+
 /new عنوان الدفتر
 /source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو
 /summary ملخص سريع
@@ -66,23 +93,33 @@ def _commands() -> str:
 /mindmap خريطة ذهنية JSON
 /table جدول CSV
 /report تقرير دراسة Markdown
-
-⬇️ قسم التحميل
-/fetch رابط
-/download رابط
-
-أرسل رابطًا مباشرًا بدون أمر ليتم التعامل معه كطلب تحميل.
-استخدم /source رابط إذا أردته كمصدر NotebookLM.
-
-إدارة:
 /jobs آخر المهام
 /status حالة الجلسة
 /auth فحص جلسة NotebookLM للأدمن
 /setwebhook ضبط Webhook للأدمن
+"""
+
+
+def _downloads_menu_text() -> str:
+    return """⬇️ قسم التحميل
+
+/fetch رابط
+/download رابط
+
+يمكنك أيضًا إرسال رابط مباشر بدون أمر وسيتم التعامل معه كطلب تحميل.
+
+يدعم حسب yt-dlp:
+YouTube
+TikTok
+Instagram
+X / Twitter
+Facebook
+SoundCloud
+روابط MP4 / MP3 المباشرة
 
 ملاحظات:
-- التحميل يعتمد على yt-dlp.
-- يوتيوب قد يحتاج YTDLP_COOKIES_TXT في Railway.
+- /source رابط خاص بـ NotebookLM فقط.
+- إذا طلب YouTube تحققًا، أضف YTDLP_COOKIES_TXT في Railway.
 """
 
 
