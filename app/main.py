@@ -184,7 +184,7 @@ async def telegram_webhook(
             return {'ok': True}
 
         if text.startswith('/start') or text.startswith('/help'):
-            await send_message(chat_id, 'أهلًا بك. هذا بوت NotebookLM شخصي للتجربة على Railway.\n\n' + _commands())
+            await send_message(chat_id, '' + _commands())
             return {'ok': True}
 
         if text.startswith('/setwebhook'):
