@@ -24,6 +24,7 @@ from .notebook_cli import (
 )
 from .store import create_job, get_job, get_user, recent_jobs, update_job, update_user
 from .telegram import (
+from openrouter_ai import ask_openrouter, OpenRouterError
     download_telegram_file,
     get_chat_id,
     get_document,
@@ -216,6 +217,28 @@ async def telegram_webhook(
             await send_message(chat_id, '<code>' + html_escape(json.dumps(job or {}, ensure_ascii=False, indent=2)) + '</code>')
             return {'ok': True}
 
+
+
+        if text.startswith('/ai'):
+            prompt = text.removeprefix('/ai').strip()
+            if not prompt:
+                await send_message(chat_id, 'اكتب سؤالك هكذا:\n<code>/ai اشرح لي هذا الموضوع</code>')
+                return {'ok': True}
+
+            await send_message(chat_id, 'جاري التفكير عبر OpenRouter...')
+            try:
+                answer = await ask_openrouter(prompt)
+            except OpenRouterError as exc:
+                await send_message(chat_id, 'فشل OpenRouter:\n<code>' + html_escape(str(exc)) + '</code>')
+                return {'ok': True}
+
+            if len(answer) <= 3500:
+                await send_message(chat_id, html_escape(answer))
+            else:
+                for i in range(0, len(answer), 3500):
+                    await send_message(chat_id, html_escape(answer[i:i+3500]))
+
+            return {'ok': True}
 
         if text.startswith('/yt'):
             url = extract_youtube_url(text)
