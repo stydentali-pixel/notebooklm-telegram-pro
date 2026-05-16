@@ -150,6 +150,32 @@ async def health_notebooklm(secret: str = Query(default='')) -> Dict[str, Any]:
 
 @app.get('/set-telegram-webhook')
 async def set_telegram_webhook(secret: str = Query(default='')) -> Dict[str, Any]:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    callback = data.get("callback_query")
+    if callback:
+        chat_id = callback["message"]["chat"]["id"]
+        callback_data = callback.get("data", "")
+
+        if callback_data == "menu:notebooklm":
+            await send_message(chat_id, _notebooklm_menu_text() if "_notebooklm_menu_text" in globals() else _notebooklm_commands())
+            return {"ok": True}
+
+        if callback_data == "menu:downloads":
+            await send_message(chat_id, _downloads_menu_text() if "_downloads_menu_text" in globals() else _download_commands())
+            return {"ok": True}
+
+        if callback_data == "menu:status":
+            await send_message(chat_id, "/status")
+            return {"ok": True}
+
+        if callback_data == "menu:jobs":
+            await send_message(chat_id, "/jobs")
+            return {"ok": True}
+
     settings = get_settings()
     if not settings.telegram_webhook_secret or secret != settings.telegram_webhook_secret:
         raise HTTPException(status_code=403, detail='Invalid secret')

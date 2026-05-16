@@ -84,6 +84,21 @@ async def send_message(chat_id: int, text: str, reply_markup=None):
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is missing")
 
+    # Inline buttons تظهر تلقائيًا في رسالة /start
+    if reply_markup is None and "/notebooklm" in text and "/downloads" in text:
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "📚 قسم NotebookLM", "callback_data": "menu:notebooklm"},
+                    {"text": "⬇️ قسم التحميل", "callback_data": "menu:downloads"},
+                ],
+                [
+                    {"text": "📌 الحالة", "callback_data": "menu:status"},
+                    {"text": "🧾 المهام", "callback_data": "menu:jobs"},
+                ],
+            ]
+        }
+
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -105,6 +120,8 @@ async def send_message(chat_id: int, text: str, reply_markup=None):
             return json.loads(res.read().decode("utf-8"))
 
     return await asyncio.to_thread(_post)
+
+
 
 
 async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:
