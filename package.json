@@ -1,0 +1,35 @@
+{
+  "name": "moataz-ai-telegram-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Webhook Telegram AI bot with Vercel AI SDK, Fastify, Prisma and Railway-ready Dockerfile.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "latest",
+    "@ai-sdk/groq": "latest",
+    "@ai-sdk/openai": "latest",
+    "@prisma/client": "latest",
+    "ai": "latest",
+    "dotenv": "latest",
+    "fastify": "latest",
+    "telegraf": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "prisma": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

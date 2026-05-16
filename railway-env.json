@@ -1,0 +1,38 @@
+{
+  "NODE_ENV": "production",
+  "PORT": "3000",
+  "PUBLIC_URL": "https://${{RAILWAY_PUBLIC_DOMAIN}}",
+  "SITE_URL": "https://YOUR-VERCEL-DOMAIN.vercel.app",
+
+  "TELEGRAM_BOT_TOKEN": "PUT_TELEGRAM_BOT_TOKEN_HERE",
+  "TELEGRAM_OWNER_ID": "8185788415",
+  "TELEGRAM_WEBHOOK_SECRET": "CHANGE_THIS_LONG_RANDOM_SECRET",
+
+  "ADMIN_PANEL_KEY": "CHANGE_THIS_ADMIN_KEY",
+  "INTERNAL_API_KEY": "CHANGE_THIS_SHARED_SECRET_FOR_VERCEL_AND_RAILWAY",
+
+  "DATABASE_URL": "postgresql://postgres.tlfbowbpribbmbrhrjjt:PUT_DB_PASSWORD_HERE@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true",
+  "DIRECT_URL": "postgresql://postgres.tlfbowbpribbmbrhrjjt:PUT_DB_PASSWORD_HERE@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres",
+
+  "SUPABASE_URL": "https://tlfbowbpribbmbrhrjjt.supabase.co",
+  "SUPABASE_ANON_KEY": "PUT_SUPABASE_ANON_KEY_HERE",
+  "SUPABASE_SERVICE_ROLE_KEY": "PUT_SUPABASE_SERVICE_ROLE_KEY_HERE",
+
+  "DEFAULT_AI_PROVIDER": "OpenRouter",
+
+  "OPENROUTER_API_KEY": "",
+  "OPENROUTER_MODEL": "openai/gpt-4o-mini",
+  "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+  "OPENROUTER_APP_NAME": "Moataz AI Telegram Bot",
+  "OPENROUTER_SITE_URL": "https://${{RAILWAY_PUBLIC_DOMAIN}}",
+
+  "GEMINI_API_KEY": "",
+  "GEMINI_MODEL": "gemini-1.5-flash",
+
+  "GROQ_API_KEY": "",
+  "GROQ_MODEL": "llama-3.1-8b-instant",
+
+  "MAX_PROMPT_CHARS": "4000",
+  "MAX_OUTPUT_TOKENS": "1200",
+  "ALLOW_ALL_USERS": "false"
+}
