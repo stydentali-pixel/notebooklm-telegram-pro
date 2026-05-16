@@ -46,26 +46,44 @@ def _is_admin(user_id: int | None) -> bool:
 
 
 def _commands() -> str:
-    return (
-        '<b>أوامر البوت:</b>\n'
-        '/new عنوان الدفتر\n'
-        '/source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو\n'
-        '/summary ملخص سريع\n'
-        '/ask سؤالك عن المصدر\n'
-        '/audio بودكاست قصير\n'
-        '/video فيديو شرح مختصر\n'
-        '/slides عرض شرائح PPTX\n'
-        '/infographic إنفوجرافيك PNG\n'
-        '/quiz اختبار Markdown\n'
-        '/cards بطاقات مراجعة Markdown\n'
-        '/mindmap خريطة ذهنية JSON\n'
-        '/table جدول CSV\n'
-        '/report تقرير دراسة Markdown\n'
-        '/jobs آخر المهام\n'
-        '/status حالة الجلسة\n'
-        '/auth فحص جلسة NotebookLM للأدمن\n'
-        '/setwebhook ضبط Webhook للأدمن\n'
-    )
+    return """أهلًا بك 👋
+
+هذا بوت واحد يجمع NotebookLM وخدمة تحميل الوسائط على Railway.
+
+اختر القسم الذي تريده:
+
+📚 قسم NotebookLM
+/new عنوان الدفتر
+/source رابط أو أرسل ملف PDF/DOCX/TXT/صوت/فيديو
+/summary ملخص سريع
+/ask سؤالك عن المصدر
+/audio بودكاست قصير
+/video فيديو شرح مختصر
+/slides عرض شرائح PPTX
+/infographic إنفوجرافيك PNG
+/quiz اختبار Markdown
+/cards بطاقات مراجعة Markdown
+/mindmap خريطة ذهنية JSON
+/table جدول CSV
+/report تقرير دراسة Markdown
+
+⬇️ قسم التحميل
+/fetch رابط
+/download رابط
+
+أرسل رابطًا مباشرًا بدون أمر ليتم التعامل معه كطلب تحميل.
+استخدم /source رابط إذا أردته كمصدر NotebookLM.
+
+إدارة:
+/jobs آخر المهام
+/status حالة الجلسة
+/auth فحص جلسة NotebookLM للأدمن
+/setwebhook ضبط Webhook للأدمن
+
+ملاحظات:
+- التحميل يعتمد على yt-dlp.
+- يوتيوب قد يحتاج YTDLP_COOKIES_TXT في Railway.
+"""
 
 
 @app.get('/')
