@@ -10,6 +10,7 @@ from typing import Any, Dict
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 
 from .config import get_settings
+from .download_quality import start_download_quality_flow, handle_download_quality_callback, is_direct_download_url
 from .notebook_cli import (
     GENERATE_SPECS,
     NotebookCLIError,
@@ -310,6 +311,30 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> Dict[str, bool]:
+    try:
+        _dlq_data = await request.json()
+    except Exception:
+        _dlq_data = {}
+
+    if await handle_download_quality_callback(_dlq_data, send_message):
+        return {"ok": True}
+
+    _dlq_msg = _dlq_data.get("message") or {}
+    _dlq_chat = (_dlq_msg.get("chat") or {}).get("id")
+    _dlq_text = (_dlq_msg.get("text") or "").strip()
+
+    if _dlq_chat and (_dlq_text.startswith("/fetch") or _dlq_text.startswith("/download")):
+        _parts = _dlq_text.split(maxsplit=1)
+        if len(_parts) < 2:
+            await send_message(_dlq_chat, "أرسل الرابط بهذا الشكل:\n/fetch https://example.com/video")
+        else:
+            await start_download_quality_flow(_dlq_chat, _parts[1].strip(), send_message)
+        return {"ok": True}
+
+    if _dlq_chat and is_direct_download_url(_dlq_text) and not _dlq_text.startswith("/source"):
+        await start_download_quality_flow(_dlq_chat, _dlq_text, send_message)
+        return {"ok": True}
+
     data = await request.json()
 
     if await _handle_menu_callback(data):
