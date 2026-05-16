@@ -123,6 +123,84 @@ SoundCloud
 """
 
 
+
+async def _answer_callback_query(callback_id: str, text: str = ""):
+    import os
+    import json
+    import urllib.request
+    import asyncio
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token or not callback_id:
+        return None
+
+    payload = {"callback_query_id": callback_id}
+    if text:
+        payload["text"] = text
+
+    def _post():
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return json.loads(res.read().decode("utf-8"))
+
+    return await asyncio.to_thread(_post)
+
+
+async def _handle_menu_callback(data: dict) -> bool:
+
+    if not callback:
+        return False
+
+    callback_id = callback.get("id", "")
+    callback_data = callback.get("data", "")
+
+    message = callback.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+
+    if not chat_id:
+        return True
+
+    if callback_data == "menu:notebooklm":
+        await _answer_callback_query(callback_id, "فتح قسم NotebookLM")
+        if "_notebooklm_menu_text" in globals():
+            await send_message(chat_id, _notebooklm_menu_text())
+        elif "_notebooklm_commands" in globals():
+            await send_message(chat_id, _notebooklm_commands())
+        else:
+            await send_message(chat_id, "📚 قسم NotebookLM غير متاح حاليًا.")
+        return True
+
+    if callback_data == "menu:downloads":
+        await _answer_callback_query(callback_id, "فتح قسم التحميل")
+        if "_downloads_menu_text" in globals():
+            await send_message(chat_id, _downloads_menu_text())
+        elif "_download_commands" in globals():
+            await send_message(chat_id, _download_commands())
+        else:
+            await send_message(chat_id, "⬇️ قسم التحميل غير متاح حاليًا.")
+        return True
+
+    if callback_data == "menu:status":
+        await _answer_callback_query(callback_id, "الحالة")
+        await send_message(chat_id, "استخدم الأمر /status لعرض حالة الجلسة.")
+        return True
+
+    if callback_data == "menu:jobs":
+        await _answer_callback_query(callback_id, "المهام")
+        await send_message(chat_id, "استخدم الأمر /jobs لعرض آخر المهام.")
+        return True
+
+    await _answer_callback_query(callback_id)
+    return True
+
+
+
 @app.get('/')
 async def root() -> Dict[str, Any]:
     settings = get_settings()
@@ -152,11 +230,13 @@ async def health_notebooklm(secret: str = Query(default='')) -> Dict[str, Any]:
 async def set_telegram_webhook(secret: str = Query(default='')) -> Dict[str, Any]:
     try:
         data = await request.json()
+        if await _handle_menu_callback(data):
+            return {"ok": True}
+
     except Exception:
         data = {}
 
-    callback = data.get("callback_query")
-    if callback:
+
         chat_id = callback["message"]["chat"]["id"]
         callback_data = callback.get("data", "")
 
