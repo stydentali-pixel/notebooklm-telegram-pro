@@ -1,37 +1,37 @@
-# Moataz AI Telegram Bot
+# Moataz AI Railway No-DB Telegram Bot
 
-بوت Telegram مستقل يعمل Webhook على Railway، يستخدم Vercel AI SDK ويدعم OpenRouter وGemini وGroq، مع Prisma/PostgreSQL ومسارات جاهزة لاحقًا للربط مع موقع Vercel.
+بوت تيليجرام مبدئي يعمل على Railway فقط، بدون Prisma وبدون Supabase وبدون قاعدة بيانات.
 
-## التشغيل السريع
+## التشغيل
 
 1. ارفع المشروع إلى GitHub.
 2. اربطه بـ Railway.
-3. أضف المتغيرات من `.env.example` في Railway Variables.
-4. افتح `/health` للتأكد من التشغيل.
-5. فعّل الويبهوك:
+3. أضف المتغيرات من `railway-env.json`.
+4. أنشئ Public Domain من Railway Networking.
+5. تأكد أن `PUBLIC_URL` يطابق رابط Railway.
+6. افتح:
 
-```bash
-curl -X POST "https://YOUR-RAILWAY-DOMAIN.up.railway.app/admin/set-webhook?key=ADMIN_PANEL_KEY"
+```txt
+/admin?key=ADMIN_PANEL_KEY
 ```
 
-## المسارات
+ثم اضغط Set Webhook.
 
-- `GET /health`
-- `GET /admin?key=ADMIN_PANEL_KEY`
-- `POST /admin/set-webhook?key=ADMIN_PANEL_KEY`
-- `POST /telegram/webhook/:secret`
-- `GET /api/internal/status` مع header `x-internal-api-key`
-- `POST /api/internal/chat` مع header `x-internal-api-key`
+## الأوامر
 
-## أوامر البوت
+```txt
+/start
+/ai سؤالك هنا
+/provider openrouter
+/provider gemini
+/provider groq
+/model
+/status
+```
 
-- `/start`
-- `/ai اكتب سؤالك`
-- `/model`
-- `/provider OpenRouter|Gemini|Groq`
-- `/reset`
-- `/status`
+## ملاحظات
 
-## إضافة مزود جديد
-
-افتح `src/ai/provider.ts` وأضف provider جديد، ثم وسّع enum في `prisma/schema.prisma` إذا أردت تسجيله في قاعدة البيانات.
+- لا توجد قاعدة بيانات في هذه النسخة.
+- الذاكرة مؤقتة فقط أثناء تشغيل السيرفر.
+- المستخدمون المسموحون يحددون عبر `ALLOWED_USER_IDS` مفصولة بفواصل.
+- لاحقًا يمكن إضافة Supabase/Prisma في نسخة منفصلة.

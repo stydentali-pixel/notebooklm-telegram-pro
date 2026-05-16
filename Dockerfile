@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS app
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
@@ -9,15 +9,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-COPY prisma ./prisma
-
 RUN npm install --include=dev
 
 COPY . .
-
-RUN npx prisma generate
-RUN npx tsc -p tsconfig.json
+RUN npm run build
 
 EXPOSE 3000
-
-CMD ["sh", "-c", "npx prisma db push && npm run start"]
+CMD ["npm", "run", "start"]
