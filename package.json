@@ -16,7 +16,7 @@
     "@ai-sdk/google": "latest",
     "@ai-sdk/groq": "latest",
     "@ai-sdk/openai": "latest",
-    "@prisma/client": "latest",
+    "@prisma/client": "6.16.3",
     "ai": "latest",
     "dotenv": "latest",
     "fastify": "latest",
@@ -24,10 +24,10 @@
     "zod": "latest"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "prisma": "latest",
+    "@types/node": "^22.10.2",
+    "prisma": "6.16.3",
     "tsx": "latest",
-    "typescript": "latest"
+    "typescript": "^5.6.3"
   },
   "engines": {
     "node": ">=20"
