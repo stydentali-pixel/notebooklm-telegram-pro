@@ -1,133 +1,29 @@
-# NotebookLM Telegram Pro for Railway + Cloudflare
+# NotebookLM + Media Telegram Pro
 
-بوت تليجرام شخصي لتجربة خدمات NotebookLM عبر `notebooklm-py` على Railway، مع Cloudflare Worker اختياري كبوابة أمامية.
+بوت تليجرام واحد يعمل على Railway ويجمع بين:
 
-> مهم: لا تضع توكن تليجرام أو جلسة Google داخل GitHub. ضعها فقط في Railway Variables.
-
-## الميزات
-
-- Webhook حقيقي عبر FastAPI.
-- تشغيل على Railway مباشرة.
-- Cloudflare Worker اختياري كـ gateway.
-- جلسة NotebookLM عبر `NOTEBOOKLM_AUTH_JSON`.
-- دعم إضافة المصادر:
-  - روابط ويب.
-  - YouTube.
-  - ملفات Telegram مثل PDF, DOCX, TXT, MP3, MP4, صور.
-- أوامر NotebookLM:
-  - `/summary`
-  - `/ask`
-  - `/audio`
-  - `/video`
-  - `/slides`
-  - `/infographic`
-  - `/quiz`
-  - `/cards`
-  - `/mindmap`
-  - `/table`
-  - `/report`
-- نظام مهام خفيف بدون Supabase الآن.
-- حفظ جلسة المستخدم محليًا في `data/state.json`.
-
-## المتغيرات المطلوبة في Railway
-
-ضعها من Railway Dashboard → Variables:
-
-```env
-TELEGRAM_BOT_TOKEN=ضع_توكن_البوت_هنا
-TELEGRAM_WEBHOOK_SECRET=ضع_سر_عشوائي_طويل
-ADMIN_IDS=224659571
-BASE_URL=https://your-app.up.railway.app
-NOTEBOOKLM_AUTH_JSON=ضع_جلسة_NotebookLM_كسطر_واحد
-NOTEBOOKLM_HL=ar
-NOTEBOOKLM_PROFILE=default
-APP_NAME=NotebookLM Telegram Pro
-DATA_DIR=/app/data
-DOWNLOAD_DIR=/app/downloads
-UPLOAD_DIR=/app/uploads
-JOB_TIMEOUT_SECONDS=900
-SOURCE_TIMEOUT_SECONDS=240
-AUTO_DELETE_NOTEBOOKS=false
-MAX_TELEGRAM_FILE_MB=45
-```
-
-لتوليد سر عشوائي:
-
-```bash
-python scripts/random_secret.py
-```
-
-## تجهيز جلسة NotebookLM
-
-على جهازك المحلي:
-
-```bash
-pip install notebooklm-py
-notebooklm login
-notebooklm auth check --test
-```
-
-ابحث عن ملف الجلسة، غالبًا يكون داخل:
-
-```txt
-~/.notebooklm/storage_state.json
-```
-
-حوّله إلى سطر واحد:
-
-```bash
-python scripts/one_line_auth.py ~/.notebooklm/storage_state.json
-```
-
-انسخ الناتج إلى Railway Variable باسم:
-
-```env
-NOTEBOOKLM_AUTH_JSON
-```
-
-## تشغيل محلي
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload --port 8000
-```
-
-## النشر على Railway
-
-1. ارفع المشروع إلى GitHub.
-2. افتح Railway.
-3. New Project → Deploy from GitHub Repo.
-4. أضف المتغيرات السابقة.
-5. بعد النشر افتح:
-
-```txt
-https://your-app.up.railway.app/health
-```
-
-6. اضبط الويب هوك:
-
-```txt
-https://your-app.up.railway.app/set-telegram-webhook?secret=TELEGRAM_WEBHOOK_SECRET
-```
-
-أو من داخل البوت كأدمن:
-
-```txt
-/setwebhook
-```
+- قسم NotebookLM: مصادر، ملخص، سؤال وجواب، صوت، فيديو، شرائح، إنفوجرافيك، كويز، بطاقات، خريطة ذهنية، جدول، تقرير.
+- قسم التحميل: استخراج الجودات عبر `yt-dlp`، اختيار فيديو/صوت، MP3/M4A/WEBM، وتقطيع الفيديو عبر `ffmpeg`.
 
 ## أوامر البوت
 
-```txt
+### القائمة
+
+```text
 /start
+/notebooklm
+/downloads
+/status
+/jobs
+```
+
+### NotebookLM
+
+```text
 /new عنوان الدفتر
-/source https://example.com
-ارفع ملف PDF مباشرة للبوت
+/source رابط أو إرسال ملف PDF/DOCX/TXT/صوت/فيديو
 /summary
-/ask ما أهم النقاط؟
+/ask سؤالك
 /audio
 /video
 /slides
@@ -137,34 +33,90 @@ https://your-app.up.railway.app/set-telegram-webhook?secret=TELEGRAM_WEBHOOK_SEC
 /mindmap
 /table
 /report
-/jobs
-/status
 /auth
 /setwebhook
 ```
 
-## Cloudflare Worker اختياري
+### التحميل
 
-بعد أن يعمل Railway، يمكنك نشر `cloudflare-worker/worker.js`.
-
-متغيرات Cloudflare Worker:
-
-```env
-RAILWAY_WEBHOOK_URL=https://your-app.up.railway.app/telegram/webhook
-TELEGRAM_WEBHOOK_SECRET=نفس_السر_الموجود_في_Railway
-GATEWAY_SECRET=سر_اختياري_لفحص_health
+```text
+/fetch رابط
+/download رابط
 ```
 
-ثم اجعل Telegram Webhook يشير إلى رابط Cloudflare Worker بدل Railway:
+بعد إرسال الرابط، يعرض البوت أزرارًا لاختيار:
 
-```txt
-https://your-worker.your-subdomain.workers.dev/telegram/webhook
+- فيديو: 144p / 240p / 360p / 480p / 720p / 1080p / أعلى إن توفر.
+- صوت: MP3 64kbps / 128kbps / 192kbps / M4A / WEBM.
+
+### تقطيع الفيديو
+
+```text
+/trim رابط 00:00:10 00:00:30
+/trim رابط 10 30
+```
+
+## متغيرات Railway المطلوبة
+
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+ADMIN_IDS=224659571
+BASE_URL=https://your-app.up.railway.app
+
+NOTEBOOKLM_AUTH_JSON=
+NOTEBOOKLM_HL=ar
+NOTEBOOKLM_PROFILE=default
+
+DATA_DIR=/app/data
+DOWNLOAD_DIR=/app/downloads
+UPLOAD_DIR=/app/uploads
+JOB_TIMEOUT_SECONDS=900
+SOURCE_TIMEOUT_SECONDS=240
+MAX_TELEGRAM_FILE_MB=45
+DOWNLOAD_MAX_FILE_MB=45
+DOWNLOAD_TIMEOUT_SECONDS=900
+EXTRACT_TIMEOUT_SECONDS=120
+
+# اختياري لتحسين تحميل YouTube
+YTDLP_COOKIES_TXT=
+```
+
+لا تحفظ `NOTEBOOKLM_AUTH_JSON` أو `YTDLP_COOKIES_TXT` داخل GitHub.
+
+## نشر Railway
+
+```bash
+railway link
+railway variable set BASE_URL=https://your-app.up.railway.app
+railway variable set TELEGRAM_BOT_TOKEN=xxx
+railway variable set TELEGRAM_WEBHOOK_SECRET=secret
+railway variable set ADMIN_IDS=224659571
+railway redeploy --yes
+```
+
+بعد النشر:
+
+```text
+https://your-app.up.railway.app/health
+```
+
+ثم داخل تليجرام:
+
+```text
+/setwebhook
+/start
+```
+
+## فحص محلي قبل الرفع
+
+```bash
+python -m compileall app
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## ملاحظات مهمة
 
-- هذه نسخة تجربة شخصية قوية بدون Supabase.
-- Railway filesystem قد لا يكون دائمًا حسب إعدادات الخدمة. لاحقًا نضيف Supabase PostgreSQL + Storage.
-- الفيديو قد يستغرق وقتًا طويلًا، وبعض ميزاته قد تتطلب توفرها في حساب Google/NotebookLM نفسه.
-- `notebooklm-py` يستخدم واجهات غير رسمية وجلسة Google، لذلك قد تحتاج تحديث الجلسة إذا انتهت.
-- لا تستخدم حساب Google الشخصي الأساسي. الأفضل حساب مخصص للتجربة.
+- لا توجد قاعدة بيانات Supabase حاليًا. التخزين المحلي JSON في `/app/data`.
+- YouTube قد يطلب تحققًا من الجلسة على سيرفرات مثل Railway. عندها استخدم `YTDLP_COOKIES_TXT` من حساب مخصص للتجربة.
+- الملفات الكبيرة قد تتجاوز حد تليجرام. غيّر `DOWNLOAD_MAX_FILE_MB` حسب خطتك وحدود البوت.

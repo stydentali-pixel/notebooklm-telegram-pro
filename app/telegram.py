@@ -64,7 +64,7 @@ def _api_url(method: str) -> str:
 
 
 async def telegram_api(method: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=70) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(_api_url(method), json=payload or {})
         r.raise_for_status()
         return r.json()
@@ -74,54 +74,16 @@ async def send_chat_action(chat_id: int, action: str = 'typing') -> Dict[str, An
     return await telegram_api('sendChatAction', {'chat_id': chat_id, 'action': action})
 
 
-async def send_message(chat_id: int, text: str, reply_markup=None):
-    import os
-    import json
-    import urllib.request
-    import asyncio
-
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is missing")
-
-    # Inline buttons تظهر تلقائيًا في رسالة /start
-    if reply_markup is None and "/notebooklm" in text and "/downloads" in text:
-        reply_markup = {
-            "inline_keyboard": [
-                [
-                    {"text": "📚 قسم NotebookLM", "callback_data": "menu:notebooklm"},
-                    {"text": "⬇️ قسم التحميل", "callback_data": "menu:downloads"},
-                ],
-                [
-                    {"text": "📌 الحالة", "callback_data": "menu:status"},
-                    {"text": "🧾 المهام", "callback_data": "menu:jobs"},
-                ],
-            ]
-        }
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
+async def send_message(chat_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        'chat_id': chat_id,
+        'text': text[:3900],
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True,
     }
-
     if reply_markup:
-        payload["reply_markup"] = reply_markup
-
-    def _post():
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as res:
-            return json.loads(res.read().decode("utf-8"))
-
-    return await asyncio.to_thread(_post)
-
-
+        payload['reply_markup'] = reply_markup
+    return await telegram_api('sendMessage', payload)
 
 
 async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -152,13 +114,21 @@ async def send_document(chat_id: int, path: str, caption: str = '') -> Dict[str,
         return r.json()
 
 
+async def answer_callback_query(callback_query_id: str, text: str = '', *, alert: bool = False) -> Dict[str, Any]:
+    return await telegram_api('answerCallbackQuery', {
+        'callback_query_id': callback_query_id,
+        'text': text[:200],
+        'show_alert': alert,
+    })
+
+
 async def set_webhook() -> Dict[str, Any]:
     settings = get_settings()
     webhook_url = settings.base_url.rstrip('/') + '/telegram/webhook'
     return await telegram_api('setWebhook', {
         'url': webhook_url,
         'secret_token': settings.telegram_webhook_secret,
-        'drop_pending_updates': True,
+        'drop_pending_updates': False,
         'allowed_updates': ['message', 'edited_message', 'callback_query'],
     })
 
@@ -180,11 +150,3 @@ async def download_telegram_file(file_id: str, target_path: str) -> str:
         r.raise_for_status()
         Path(target_path).write_bytes(r.content)
     return target_path
-
-
-async def answer_callback_query(callback_query_id: str, text: str = '', *, alert: bool = False) -> Dict[str, Any]:
-    return await telegram_api('answerCallbackQuery', {
-        'callback_query_id': callback_query_id,
-        'text': text[:200],
-        'show_alert': alert,
-    })

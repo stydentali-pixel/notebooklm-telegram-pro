@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shlex
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -10,10 +11,14 @@ from typing import Any, Dict
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 
 from .config import get_settings
-from .download_quality import start_download_quality_flow, handle_download_quality_callback, is_direct_download_url
+from .download_quality import (
+    handle_download_quality_callback,
+    is_direct_download_url,
+    start_download_quality_flow,
+    trim_video_url,
+)
 from .notebook_cli import (
     GENERATE_SPECS,
-    NotebookCLIError,
     add_source,
     ask,
     auth_check,
@@ -25,7 +30,7 @@ from .notebook_cli import (
 )
 from .store import create_job, get_job, get_user, recent_jobs, update_job, update_user
 from .telegram import (
-# from openrouter_ai import ask_openrouter, OpenRouterError  # disabled: caused Railway SyntaxError
+    answer_callback_query,
     download_telegram_file,
     get_chat_id,
     get_document,
@@ -37,17 +42,20 @@ from .telegram import (
     set_webhook,
 )
 
-app = FastAPI(title='NotebookLM Telegram Pro')
+try:
+    from .openrouter_ai import OpenRouterError, ask_openrouter
+except Exception:  # optional feature
+    OpenRouterError = RuntimeError  # type: ignore
+    ask_openrouter = None  # type: ignore
+
+
+app = FastAPI(title='NotebookLM + Media Telegram Pro')
 URL_RE = re.compile(r'https?://\S+')
 
 
 def _is_admin(user_id: int | None) -> bool:
     settings = get_settings()
     return bool(user_id and user_id in settings.admins)
-
-
-def _commands() -> str:
-    return _main_menu_text()
 
 
 def _main_menu_text() -> str:
@@ -59,7 +67,7 @@ def _main_menu_text() -> str:
 لإضافة المصادر، التلخيص، الأسئلة، الشرائح، الكويز، البطاقات، التقرير، الصوت، الفيديو، الإنفوجرافيك، الخريطة الذهنية، والجداول.
 
 ⬇️ قسم التحميل
-لتحميل الوسائط من الروابط، اختيار الجودة، أو التحويل إلى MP3.
+تحميل الوسائط من الروابط، اختيار الجودة، التحويل إلى MP3، وتقطيع الفيديو.
 
 اضغط أحد الأزرار بالأسفل أو استخدم:
 /notebooklm
@@ -67,14 +75,18 @@ def _main_menu_text() -> str:
 """
 
 
-def _main_menu_keyboard() -> dict:
+def _main_menu_keyboard() -> dict[str, Any]:
     return {
-        "keyboard": [
-            [{"text": "/notebooklm"}, {"text": "/downloads"}],
-            [{"text": "/status"}, {"text": "/jobs"}],
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": False,
+        'inline_keyboard': [
+            [
+                {'text': '📚 قسم NotebookLM', 'callback_data': 'menu:notebooklm'},
+                {'text': '⬇️ قسم التحميل', 'callback_data': 'menu:downloads'},
+            ],
+            [
+                {'text': '📌 الحالة', 'callback_data': 'menu:status'},
+                {'text': '🧾 المهام', 'callback_data': 'menu:jobs'},
+            ],
+        ]
     }
 
 
@@ -94,6 +106,8 @@ def _notebooklm_menu_text() -> str:
 /mindmap خريطة ذهنية JSON
 /table جدول CSV
 /report تقرير دراسة Markdown
+
+إدارة:
 /jobs آخر المهام
 /status حالة الجلسة
 /auth فحص جلسة NotebookLM للأدمن
@@ -106,100 +120,62 @@ def _downloads_menu_text() -> str:
 
 /fetch رابط
 /download رابط
+يعرض اختيار النوع ثم الدقة أو نوع الصوت.
 
-يمكنك أيضًا إرسال رابط مباشر بدون أمر وسيتم التعامل معه كطلب تحميل.
+/trim رابط بداية نهاية
+لتقطيع الفيديو. أمثلة:
+<code>/trim https://youtu.be/ID 00:00:10 00:00:30</code>
+<code>/trim https://youtu.be/ID 10 30</code>
+
+يمكنك أيضًا إرسال رابط مباشر بدون أمر ليتم فتح قائمة التحميل.
 
 يدعم حسب yt-dlp:
-YouTube
-TikTok
-Instagram
-X / Twitter
-Facebook
-SoundCloud
-روابط MP4 / MP3 المباشرة
+YouTube، TikTok، Instagram، X/Twitter، Facebook، SoundCloud، وروابط MP4/MP3 المباشرة.
 
 ملاحظات:
 - /source رابط خاص بـ NotebookLM فقط.
-- إذا طلب YouTube تحققًا، أضف YTDLP_COOKIES_TXT في Railway.
+- يوتيوب قد يحتاج YTDLP_COOKIES_TXT في Railway.
 """
 
 
-
-async def _answer_callback_query(callback_id: str, text: str = ""):
-    import os
-    import json
-    import urllib.request
-    import asyncio
-
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token or not callback_id:
-        return None
-
-    payload = {"callback_query_id": callback_id}
-    if text:
-        payload["text"] = text
-
-    def _post():
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/answerCallbackQuery",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as res:
-            return json.loads(res.read().decode("utf-8"))
-
-    return await asyncio.to_thread(_post)
+def _commands() -> str:
+    return _main_menu_text()
 
 
-async def _handle_menu_callback(data: dict) -> bool:
-
+async def _handle_menu_callback(data: dict[str, Any]) -> bool:
+    callback = data.get('callback_query')
     if not callback:
         return False
+    callback_data = callback.get('data', '')
+    if not callback_data.startswith('menu:'):
+        return False
 
-    callback_id = callback.get("id", "")
-    callback_data = callback.get("data", "")
-
-    message = callback.get("message") or {}
-    chat = message.get("chat") or {}
-    chat_id = chat.get("id")
-
+    callback_id = callback.get('id', '')
+    message = callback.get('message') or {}
+    chat = message.get('chat') or {}
+    chat_id = chat.get('id')
     if not chat_id:
         return True
 
-    if callback_data == "menu:notebooklm":
-        await _answer_callback_query(callback_id, "فتح قسم NotebookLM")
-        if "_notebooklm_menu_text" in globals():
-            await send_message(chat_id, _notebooklm_menu_text())
-        elif "_notebooklm_commands" in globals():
-            await send_message(chat_id, _notebooklm_commands())
-        else:
-            await send_message(chat_id, "📚 قسم NotebookLM غير متاح حاليًا.")
+    if callback_data == 'menu:notebooklm':
+        await answer_callback_query(callback_id, 'فتح قسم NotebookLM')
+        await send_message(chat_id, _notebooklm_menu_text())
+        return True
+    if callback_data == 'menu:downloads':
+        await answer_callback_query(callback_id, 'فتح قسم التحميل')
+        await send_message(chat_id, _downloads_menu_text())
+        return True
+    if callback_data == 'menu:status':
+        await answer_callback_query(callback_id, 'الحالة')
+        await _send_status(chat_id)
+        return True
+    if callback_data == 'menu:jobs':
+        await answer_callback_query(callback_id, 'المهام')
+        await _send_jobs(chat_id)
         return True
 
-    if callback_data == "menu:downloads":
-        await _answer_callback_query(callback_id, "فتح قسم التحميل")
-        if "_downloads_menu_text" in globals():
-            await send_message(chat_id, _downloads_menu_text())
-        elif "_download_commands" in globals():
-            await send_message(chat_id, _download_commands())
-        else:
-            await send_message(chat_id, "⬇️ قسم التحميل غير متاح حاليًا.")
-        return True
-
-    if callback_data == "menu:status":
-        await _answer_callback_query(callback_id, "الحالة")
-        await send_message(chat_id, "استخدم الأمر /status لعرض حالة الجلسة.")
-        return True
-
-    if callback_data == "menu:jobs":
-        await _answer_callback_query(callback_id, "المهام")
-        await send_message(chat_id, "استخدم الأمر /jobs لعرض آخر المهام.")
-        return True
-
-    await _answer_callback_query(callback_id)
+    await answer_callback_query(callback_id)
     return True
-
 
 
 @app.get('/')
@@ -210,13 +186,13 @@ async def root() -> Dict[str, Any]:
         'status': 'ok',
         'health': '/health',
         'telegram_webhook': '/telegram/webhook',
-        'features': list(GENERATE_SPECS.keys()) + ['summary', 'ask', 'source', 'file-upload'],
+        'features': list(GENERATE_SPECS.keys()) + ['summary', 'ask', 'source', 'file-upload', 'downloader', 'quality-picker', 'trim'],
     }
 
 
 @app.get('/health')
-async def health() -> Dict[str, str]:
-    return {'status': 'ok'}
+async def health() -> Dict[str, Any]:
+    return {'status': 'ok', 'ok': True}
 
 
 @app.get('/health/notebooklm')
@@ -229,34 +205,6 @@ async def health_notebooklm(secret: str = Query(default='')) -> Dict[str, Any]:
 
 @app.get('/set-telegram-webhook')
 async def set_telegram_webhook(secret: str = Query(default='')) -> Dict[str, Any]:
-    try:
-        data = await request.json()
-        if await _handle_menu_callback(data):
-            return {"ok": True}
-
-    except Exception:
-        data = {}
-
-
-        chat_id = callback["message"]["chat"]["id"]
-        callback_data = callback.get("data", "")
-
-        if callback_data == "menu:notebooklm":
-            await send_message(chat_id, _notebooklm_menu_text() if "_notebooklm_menu_text" in globals() else _notebooklm_commands())
-            return {"ok": True}
-
-        if callback_data == "menu:downloads":
-            await send_message(chat_id, _downloads_menu_text() if "_downloads_menu_text" in globals() else _download_commands())
-            return {"ok": True}
-
-        if callback_data == "menu:status":
-            await send_message(chat_id, "/status")
-            return {"ok": True}
-
-        if callback_data == "menu:jobs":
-            await send_message(chat_id, "/jobs")
-            return {"ok": True}
-
     settings = get_settings()
     if not settings.telegram_webhook_secret or secret != settings.telegram_webhook_secret:
         raise HTTPException(status_code=403, detail='Invalid secret')
@@ -306,45 +254,53 @@ async def handle_document(chat_id: int, update: Dict[str, Any]) -> None:
     await send_message(chat_id, f'تمت إضافة الملف.\nNotebook: <code>{html_escape(nb)}</code>\nSource: <code>{html_escape(src)}</code>\n\nاستخدم /summary أو /ask أو /slides أو /quiz.')
 
 
+async def _send_status(chat_id: int) -> None:
+    user = get_user(chat_id)
+    safe_user = {k: v for k, v in user.items() if 'token' not in k.lower() and 'cookie' not in k.lower()}
+    await send_message(chat_id, '<b>حالة الجلسة:</b>\n<code>' + html_escape(json.dumps(safe_user, ensure_ascii=False, indent=2)) + '</code>')
+
+
+async def _send_jobs(chat_id: int) -> None:
+    jobs = recent_jobs(chat_id)
+    if not jobs:
+        await send_message(chat_id, 'لا توجد مهام بعد.')
+        return
+    body = '\n\n'.join([f"<b>{html_escape(j['kind'])}</b> | <code>{html_escape(j['id'])}</code> | {html_escape(j.get('status'))}" for j in jobs])
+    await send_message(chat_id, body)
+
+
+def _parse_trim_command(text: str) -> tuple[str, str, str] | None:
+    try:
+        parts = shlex.split(text)
+    except Exception:
+        parts = text.split()
+    if len(parts) < 4:
+        return None
+    # /trim url start end
+    if is_direct_download_url(parts[1]):
+        return parts[1], parts[2], parts[3]
+    # /trim start end url
+    if len(parts) >= 4 and is_direct_download_url(parts[3]):
+        return parts[3], parts[1], parts[2]
+    return None
+
+
 @app.post('/telegram/webhook')
 async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> Dict[str, bool]:
-    try:
-        _dlq_data = await request.json()
-    except Exception:
-        _dlq_data = {}
-
-    if await handle_download_quality_callback(_dlq_data, send_message):
-        return {"ok": True}
-
-    _dlq_msg = _dlq_data.get("message") or {}
-    _dlq_chat = (_dlq_msg.get("chat") or {}).get("id")
-    _dlq_text = (_dlq_msg.get("text") or "").strip()
-
-    if _dlq_chat and (_dlq_text.startswith("/fetch") or _dlq_text.startswith("/download")):
-        _parts = _dlq_text.split(maxsplit=1)
-        if len(_parts) < 2:
-            await send_message(_dlq_chat, "أرسل الرابط بهذا الشكل:\n/fetch https://example.com/video")
-        else:
-            await start_download_quality_flow(_dlq_chat, _parts[1].strip(), send_message)
-        return {"ok": True}
-
-    if _dlq_chat and is_direct_download_url(_dlq_text) and not _dlq_text.startswith("/source"):
-        await start_download_quality_flow(_dlq_chat, _dlq_text, send_message)
-        return {"ok": True}
-
-    data = await request.json()
-
-    if await _handle_menu_callback(data):
-        return {"ok": True}
-
     settings = get_settings()
     if settings.telegram_webhook_secret and x_telegram_bot_api_secret_token != settings.telegram_webhook_secret:
         raise HTTPException(status_code=403, detail='Invalid Telegram secret token')
 
     update: Dict[str, Any] = await request.json()
+
+    if await _handle_menu_callback(update):
+        return {'ok': True}
+    if await handle_download_quality_callback(update, send_message):
+        return {'ok': True}
+
     chat_id = get_chat_id(update)
     user_id = get_user_id(update)
     text = get_text(update).strip()
@@ -357,7 +313,37 @@ async def telegram_webhook(
             return {'ok': True}
 
         if text.startswith('/start') or text.startswith('/help'):
-            await send_message(chat_id, '' + _commands())
+            await send_message(chat_id, _main_menu_text(), reply_markup=_main_menu_keyboard())
+            return {'ok': True}
+
+        if text.startswith('/notebooklm'):
+            await send_message(chat_id, _notebooklm_menu_text())
+            return {'ok': True}
+
+        if text.startswith('/downloads') or text.startswith('/download_help'):
+            await send_message(chat_id, _downloads_menu_text())
+            return {'ok': True}
+
+        if text.startswith('/fetch') or text.startswith('/download'):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2:
+                await send_message(chat_id, 'أرسل الرابط بهذا الشكل:\n<code>/fetch https://example.com/video</code>')
+            else:
+                await start_download_quality_flow(chat_id, parts[1].strip(), send_message)
+            return {'ok': True}
+
+        if text.startswith('/trim'):
+            parsed = _parse_trim_command(text)
+            if not parsed:
+                await send_message(chat_id, 'استخدم الأمر هكذا:\n<code>/trim الرابط 00:00:10 00:00:30</code>\nأو:\n<code>/trim الرابط 10 30</code>')
+                return {'ok': True}
+            url, start, end = parsed
+            await trim_video_url(chat_id, url, start, end, send_message)
+            return {'ok': True}
+
+        # رابط مباشر = قسم التحميل. /source فقط يذهب إلى NotebookLM.
+        if text and is_direct_download_url(text):
+            await start_download_quality_flow(chat_id, text, send_message)
             return {'ok': True}
 
         if text.startswith('/setwebhook'):
@@ -378,8 +364,7 @@ async def telegram_webhook(
             return {'ok': True}
 
         if text.startswith('/status'):
-            user = get_user(chat_id)
-            await send_message(chat_id, '<b>حالة الجلسة:</b>\n<code>' + html_escape(json.dumps(user, ensure_ascii=False, indent=2)) + '</code>')
+            await _send_status(chat_id)
             return {'ok': True}
 
         if text.startswith('/list'):
@@ -391,12 +376,7 @@ async def telegram_webhook(
             return {'ok': True}
 
         if text.startswith('/jobs'):
-            jobs = recent_jobs(chat_id)
-            if not jobs:
-                await send_message(chat_id, 'لا توجد مهام بعد.')
-                return {'ok': True}
-            body = '\n\n'.join([f"<b>{html_escape(j['kind'])}</b> | <code>{html_escape(j['id'])}</code> | {html_escape(j.get('status'))}" for j in jobs])
-            await send_message(chat_id, body)
+            await _send_jobs(chat_id)
             return {'ok': True}
 
         if text.startswith('/job'):
@@ -408,38 +388,22 @@ async def telegram_webhook(
             await send_message(chat_id, '<code>' + html_escape(json.dumps(job or {}, ensure_ascii=False, indent=2)) + '</code>')
             return {'ok': True}
 
-
-
         if text.startswith('/ai'):
             prompt = text.removeprefix('/ai').strip()
             if not prompt:
                 await send_message(chat_id, 'اكتب سؤالك هكذا:\n<code>/ai اشرح لي هذا الموضوع</code>')
                 return {'ok': True}
-
+            if ask_openrouter is None:
+                await send_message(chat_id, 'ميزة OpenRouter غير مفعلة في هذه النسخة.')
+                return {'ok': True}
             await send_message(chat_id, 'جاري التفكير عبر OpenRouter...')
             try:
                 answer = await ask_openrouter(prompt)
             except OpenRouterError as exc:
                 await send_message(chat_id, 'فشل OpenRouter:\n<code>' + html_escape(str(exc)) + '</code>')
                 return {'ok': True}
-
-            if len(answer) <= 3500:
-                await send_message(chat_id, html_escape(answer))
-            else:
-                for i in range(0, len(answer), 3500):
-                    await send_message(chat_id, html_escape(answer[i:i+3500]))
-
-            return {'ok': True}
-
-        if text.startswith('/yt'):
-            url = extract_youtube_url(text)
-            if not url:
-                await send_message(chat_id, 'أرسل رابط يوتيوب هكذا:\n<code>/yt https://youtube.com/watch?v=...</code>')
-                return {'ok': True}
-
-            await send_message(chat_id, 'جاري تحميل فيديو يوتيوب...')
-            video_path = await download_youtube_video(url)
-            await send_document(chat_id, str(video_path), caption='تم تحميل الفيديو من يوتيوب')
+            for i in range(0, len(answer), 3500):
+                await send_message(chat_id, html_escape(answer[i:i + 3500]))
             return {'ok': True}
 
         if text.startswith('/new'):
@@ -449,8 +413,8 @@ async def telegram_webhook(
             await send_message(chat_id, f'تم إنشاء دفتر جديد:\n<b>{html_escape(title)}</b>\n<code>{html_escape(nb)}</code>\n\nأرسل /source مع رابط أو ارفع ملفًا.')
             return {'ok': True}
 
-        if text.startswith('/source') or (text and URL_RE.search(text) and not text.startswith('/ask')):
-            payload = text.removeprefix('/source').strip() if text.startswith('/source') else URL_RE.search(text).group(0)
+        if text.startswith('/source'):
+            payload = text.removeprefix('/source').strip()
             if not payload:
                 await send_message(chat_id, 'اكتب: /source https://example.com أو أرسل ملف PDF.')
                 return {'ok': True}
@@ -479,23 +443,18 @@ async def telegram_webhook(
             await send_message(chat_id, html_escape(result))
             return {'ok': True}
 
-        command = text.split()[0].lstrip('/').lower() if text.startswith('/') else ''
-        alias = {'flashcards': 'cards', 'card': 'cards', 'mind-map': 'mindmap', 'data-table': 'table', 'slide': 'slides'}
-        kind = alias.get(command, command)
-        if kind in GENERATE_SPECS:
-            nb = await ensure_notebook(chat_id)
-            desc = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ''
-            job = create_job(chat_id, kind, nb, desc)
-            asyncio.create_task(run_generation_job(job['id'], chat_id, kind, nb, desc))
-            await send_message(chat_id, f'تم إنشاء المهمة: <code>{html_escape(job["id"])}</code>\nتابعها عبر /job {html_escape(job["id"])}')
-            return {'ok': True}
+        for kind in GENERATE_SPECS:
+            if text.startswith('/' + kind):
+                nb = await ensure_notebook(chat_id)
+                description = text.removeprefix('/' + kind).strip()
+                job = create_job(chat_id, kind, nb, description)
+                await send_message(chat_id, f'تم إنشاء مهمة <b>{html_escape(kind)}</b>.\nJob: <code>{job["id"]}</code>')
+                asyncio.create_task(run_generation_job(job['id'], chat_id, kind, nb, description))
+                return {'ok': True}
 
-        await send_message(chat_id, 'لم أفهم الأمر.\n\n' + _commands())
+        await send_message(chat_id, _main_menu_text(), reply_markup=_main_menu_keyboard())
         return {'ok': True}
 
-    except NotebookCLIError as exc:
-        await send_message(chat_id, 'فشل NotebookLM:\n<code>' + html_escape(str(exc)) + '</code>')
-        return {'ok': True}
     except Exception as exc:
         await send_message(chat_id, 'حدث خطأ:\n<code>' + html_escape(str(exc)) + '</code>')
         return {'ok': True}
