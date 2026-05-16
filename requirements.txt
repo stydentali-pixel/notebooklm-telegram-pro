@@ -4,5 +4,4 @@ httpx==0.28.1
 pydantic-settings==2.7.1
 python-multipart==0.0.20
 notebooklm-py>=0.4.1
-
-yt-dlp>=2026.1.1
+yt-dlp>=2025.1.15
